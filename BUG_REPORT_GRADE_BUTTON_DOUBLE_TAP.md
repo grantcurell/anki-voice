@@ -1,3 +1,87 @@
+# Bug Report: Grade Buttons Require Double-Tap in Answer Phase
+
+## Problem Description
+
+When pressing a grade button (Again, Hard, Good, Easy) during the `awaitingAnswer` phase, the button does not immediately submit the grade and advance to the next card. Instead, it transitions to the `awaitingAction` state (grading phase), requiring the user to press the same button again to actually submit the grade.
+
+### Expected Behavior
+
+When a grade button is pressed during `awaitingAnswer` phase, it should:
+1. Immediately submit that grade
+2. Advance to the next card automatically
+3. Not require a second button press
+
+### Actual Behavior
+
+When a grade button is pressed during `awaitingAnswer` phase:
+1. Transitions to `awaitingAction` state (grading/listening phase)
+2. Speaks "Skipped to grading. Say a grade or use the buttons."
+3. User must press the grade button **again** to actually submit the grade
+4. Only then does it advance to the next card
+
+## Root Cause
+
+In `handleGradeButton(_:)`, the `awaitingAnswer` case currently matches the old SKIP button behavior:
+
+```swift
+case .awaitingAnswer(let cid, let front, let back):
+    // behave like old SKIP in this phase: go to grading/listening (don't submit yet)
+    stopForTransition(true)
+    state = .awaitingAction(cardId: cid, front: front, back: back)
+    await tts.speakAndWait("Skipped to grading. Say a grade or use the buttons.")
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    await listenForAction()
+```
+
+This treats the button press as a "skip" action rather than an immediate grade submission.
+
+## Desired Fix
+
+The `awaitingAnswer` case should immediately submit the pressed grade, similar to the `awaitingAction` case:
+
+```swift
+case .awaitingAnswer(let cid, let front, let back):
+    // Immediately submit the grade and advance
+    stopForTransition(false)  // stop IO since we're submitting
+    let ok = await submitGrade(ease)
+    if ok {
+        await tts.speakAndWait(canonicalName(ease))
+        await startReview()
+    } else {
+        tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
+        // Transition to action state on failure to allow retry
+        state = .awaitingAction(cardId: cid, front: front, back: back)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        await listenForAction()
+    }
+```
+
+This would make the grade buttons behave consistently: **one press = immediate grade submission** regardless of which phase the user is in.
+
+## Alternative Consideration
+
+If we want to preserve the "skip to grading" behavior, we could:
+- Make it context-aware (e.g., if user hasn't started speaking, skip to grading; if they have, submit immediately)
+- Or add a separate "Skip" button back for that behavior
+- But the current UX expectation is clear: **pressing a grade button should grade immediately**
+
+## Impact
+
+**Severity**: Medium
+- Workaround exists (press button twice), but creates confusing UX
+- Users expect immediate feedback when pressing a button
+- Violates the principle of least surprise
+
+## Questions for Expert
+
+1. Should grade buttons in `awaitingAnswer` immediately submit, or is there a reason to keep the "skip to grading" behavior?
+2. If we want immediate submission, should we also handle `explaining` state the same way (immediately submit when pressed during explanation)?
+3. Should we stop the explanation TTS immediately when a grade button is pressed, or let it finish first?
+
+---
+
+## Attached Code
+
 // anki-voice-ios / ContentView.swift
 import SwiftUI
 import Speech
@@ -1025,34 +1109,21 @@ struct ContentView: View {
             await startAnswerPhase(cardId: cid, front: front, back: back)
 
         case .awaitingAnswer(let cid, let front, let back):
-            // Immediate grade + advance (one tap)
-            stopForTransition(false)                 // stop TTS/STT; no immediate re-listen
-            state = .awaitingAction(cardId: cid, front: front, back: back) // to satisfy submitGrade guard
-            let ok = await submitGrade(ease)
-            if ok {
-                await tts.speakAndWait(canonicalName(ease))
-                await startReview()
-            } else {
-                tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
-                // fall back to action so user can retry by voice or buttons
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                await listenForAction()
-            }
+            // behave like old SKIP in this phase: go to grading/listening (don't submit yet)
+            stopForTransition(true)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
+            // optional prompt; you can remove for speed
+            await tts.speakAndWait("Skipped to grading. Say a grade or use the buttons.")
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            await listenForAction()
 
         case .explaining(let cid, let front, let back, _):
-            // Also immediate grade while explaining
+            // stop explanation, go to grading/listening (don't submit yet)
             tts.stopSpeaking()
-            stopForTransition(false)
+            stopForTransition(true)
             state = .awaitingAction(cardId: cid, front: front, back: back)
-            let ok = await submitGrade(ease)
-            if ok {
-                await tts.speakAndWait(canonicalName(ease))
-                await startReview()
-            } else {
-                tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                await listenForAction()
-            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            await listenForAction()
 
         case .awaitingAction:
             // submit immediately and advance

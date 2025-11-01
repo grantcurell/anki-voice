@@ -1,3 +1,160 @@
+# Feature Request: UI Improvements - Question Display & Grade Buttons
+
+## Overview
+
+We need two UI enhancements to improve the user experience during card review:
+
+1. **Smart Question/Answer Display**: Show the question initially, transcript while speaking, and the correct answer during LLM processing/feedback
+2. **Replace Skip Button with Grade Buttons**: Replace the skip button with direct grade buttons (Again, Hard, Good, Easy) that advance to the next card
+
+## Feature 1: Question/Answer Display Logic
+
+### Current Behavior
+- The UI shows various state descriptions and transcript, but doesn't consistently display the card content
+- The question (front) is not prominently displayed during the answer phase
+- The correct answer (back) is not shown during LLM processing or feedback
+
+### Desired Behavior
+
+**During `awaitingAnswer` phase:**
+- Display the **question (front text)** prominently
+- When user starts speaking (transcript becomes non-empty), continue showing the question but also show the transcript
+- Once the answer is submitted to the LLM, switch to showing the **correct answer (back text)**
+
+**During `explaining` phase:**
+- Display the **correct answer (back text)** while the LLM explanation is being spoken
+
+**During `awaitingAction` phase:**
+- Display the **correct answer (back text)** while waiting for grade/command
+
+### Implementation Notes
+
+The `ReviewState` enum already contains `front` and `back` text. We need to:
+
+1. Add UI logic to determine what to display based on:
+   - Current state
+   - Whether transcript is empty or not (during answer phase)
+   
+2. Create a computed property or helper that returns the appropriate display text:
+   ```swift
+   private var displayText: String {
+       switch state {
+       case .awaitingAnswer(let cid, let front, let back):
+           // Show front until speaking starts, then keep front visible but transcript is shown separately
+           return front
+       case .explaining(let cid, let front, let back, _):
+           return back
+       case .awaitingAction(let cid, let front, let back):
+           return back
+       case .readingFront(let cid, let front, let back):
+           return front
+       // ... other cases
+       }
+   }
+   ```
+
+3. Update the UI to show this prominently (maybe a large Text view or card-like display)
+
+## Feature 2: Replace Skip Button with Grade Buttons
+
+### Current Behavior
+- A large red "SKIP" button appears at the bottom center for all active states
+- The skip button's behavior varies by state:
+  - `readingFront` → jump to answer phase
+  - `awaitingAnswer` → jump to grading phase (skip LLM)
+  - `explaining` → stop explanation, go to grading
+  - `awaitingAction` → advance to next card
+  - `confirmingGrade` → cancel confirmation
+
+- Separate grade buttons (Again, Hard, Good, Easy) exist in the UI but only show during `awaitingAction` state
+
+### Desired Behavior
+
+**Replace the Skip button entirely with Always-Visible Grade Buttons:**
+
+- Show **Again, Hard, Good, Easy** buttons at all times during active review states
+- These buttons should work as follows:
+  - **During `awaitingAnswer`**: When pressed, immediately skip to grading (same as old skip behavior in this state)
+  - **During `explaining`**: When pressed, stop explanation and skip to grading (same as old skip)
+  - **During `awaitingAction`**: When pressed, submit the grade and advance to next card (same as current grade button behavior)
+  - **During `confirmingGrade`**: When pressed, confirm the grade and advance (replacing the confirmation flow)
+  - **During `readingFront`**: When pressed, jump to answer phase (same as old skip)
+
+- After any grade button is pressed and succeeds:
+  - Advance to the next card automatically (call `await startReview()`)
+  - Don't prompt for undo unless the user says "undo" (keep voice undo functionality)
+
+- The voice "undo" functionality should remain unchanged (user can say "undo" to revert the last grade)
+
+### Implementation Notes
+
+1. Remove the skip button overlay logic
+2. Make the grade buttons always visible (not just in `awaitingAction`)
+3. Update `handleGradeButtonPress(_ ease: Int)` or similar to handle all states appropriately:
+   ```swift
+   func handleGradeButton(_ ease: Int) async {
+       switch state {
+       case .readingFront(let cid, let front, let back):
+           state = .awaitingAnswer(cardId: cid, front: front, back: back)
+           await startAnswerPhase(cardId: cid, front: front, back: back)
+       case .awaitingAnswer(let cid, let front, let back):
+           // Skip LLM, go straight to grading
+           state = .awaitingAction(cardId: cid, front: front, back: back)
+           await tts.speakAndWait("Skipped to grading. Say a grade like 'grade good'.")
+           await listenForAction()
+       case .explaining(let cid, let front, let back, _):
+           tts.stopSpeaking()
+           state = .awaitingAction(cardId: cid, front: front, back: back)
+           await listenForAction()
+       case .awaitingAction(let cid, _, _):
+           // Submit grade and advance
+           if await submitGrade(ease) {
+               await tts.speakAndWait("\(canonicalName(ease))")
+               await startReview()
+           } else {
+               tts.speak("Failed to submit grade.")
+           }
+       case .confirmingGrade(let cid, let easeToConfirm, let front, let back):
+           // Confirm and submit
+           if await submitGrade(easeToConfirm) {
+               await tts.speakAndWait("\(canonicalName(easeToConfirm))")
+               await startReview()
+           }
+       default:
+           break
+       }
+   }
+   ```
+
+4. Keep the existing undo voice functionality intact
+
+## Questions for Expert
+
+1. **Display Logic**: Should we show both question and transcript simultaneously during answer phase, or replace question with transcript once speaking starts? Or should transcript appear below/overlay the question?
+
+2. **Grade Button Layout**: Should the 4 buttons be arranged horizontally (HStack) or vertically (VStack)? Should they be prominent/large like the current skip button, or smaller?
+
+3. **State Transitions**: When a grade button is pressed during `awaitingAnswer`, should we:
+   - Immediately submit that grade (skipping LLM entirely)?
+   - Or go to `awaitingAction` and let the user confirm via voice (current skip behavior)?
+
+4. **Visual Feedback**: Should the grade buttons be visually distinct when "active" vs when they would just skip? Or should all states just show the same buttons?
+
+5. **Transcript Display**: During answer phase, should the transcript replace the question text, or should both be visible (question above, transcript below)?
+
+## Code Context
+
+The full `ContentView.swift` is attached below. Key areas to modify:
+
+- **State Display Logic**: Around line 700-750 where UI is rendered
+- **Skip Button**: Currently around line 680-700
+- **Grade Buttons**: Currently around line 580-650 (only visible in `awaitingAction`)
+- **State Management**: `ReviewState` enum and state transitions
+
+---
+
+## Attached Code
+
 // anki-voice-ios / ContentView.swift
 import SwiftUI
 import Speech
@@ -524,7 +681,6 @@ struct ContentView: View {
     @State private var currentNetworkTask: Task<Void, Never>?   // cancel LLM calls
     @State private var hasPromptedForAnswer = false
     @State private var isBusy = false  // debounce Start Review
-    @State private var showBackDuringProcessing = false  // show back while LLM is grading
 
     var canStart: Bool { micAuthorized && speechAuthorized }
     
@@ -597,66 +753,121 @@ struct ContentView: View {
                 }
                 .disabled(!canStart || isBusy)
 
-                // Card displaying current prompt/answer
-                if !displayText.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !displayTitle.isEmpty {
-                            Text(displayTitle)
-                                .font(.headline)
-                                .foregroundColor(.secondary)
-                        }
-                        Text(displayText)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if shouldShowTranscript {
-                            Divider().opacity(0.3)
-                            Text(stt.transcript)
-                                .font(.body)
-                                .foregroundColor(.orange)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityLabel("Your answer")
-                        }
-        }
-        .padding()
-                    .background(Color(.secondarySystemBackground))
-                    .cornerRadius(12)
-                }
-
                 if isListening {
                     Text("Listening…").foregroundColor(.orange)
-                        .font(.caption)
+                    Text(stt.transcript).padding()
                 }
 
                 // Show current state
                 Text("State: \(stateDescription)").font(.caption)
 
-                Spacer()
-
-                // Always-visible grade buttons
-                if case .idle = state {
-                    EmptyView()
-                } else {
-                    VStack(spacing: 10) {
-                        HStack(spacing: 10) {
-                            gradeButton("Again", ease: 1)
-                            gradeButton("Hard", ease: 2)
-                            gradeButton("Good", ease: 3)
-                            gradeButton("Easy", ease: 4)
-                        }
-                        .padding(.horizontal)
-                        .padding(.bottom, 6)
-
-                        // Optional tip line
-                        Text("Say \"undo\" to change the last grade.")
+                // Button fallback for awaitingAction state
+                if case .awaitingAction = state {
+        VStack {
+                        Text("Voice commands: 'grade good', 'explain more about...'")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        HStack {
+                            Button("Again") {
+                                #if os(iOS)
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                #endif
+                                Task {
+                                    if await submitGrade(1) {
+                                        await tts.speakAndWait("Marked again. \(undoPrompt())")
+                                        await startReview()
+                                    } else {
+                                        tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
+                                    }
+                                }
+                            }
+                            .accessibilityLabel("Mark again")
+                            Button("Hard") {
+                                #if os(iOS)
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                #endif
+                                Task {
+                                    if await submitGrade(2) {
+                                        await tts.speakAndWait("Marked hard. \(undoPrompt())")
+                                        await startReview()
+                                    } else {
+                                        tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
+                                    }
+                                }
+                            }
+                            .accessibilityLabel("Mark hard")
+                            Button("Good") {
+                                #if os(iOS)
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                #endif
+                                Task {
+                                    if await submitGrade(3) {
+                                        await tts.speakAndWait("Marked good. \(undoPrompt())")
+                                        await startReview()
+                                    } else {
+                                        tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
+                                    }
+                                }
+                            }
+                            .accessibilityLabel("Mark good")
+                            Button("Easy") {
+                                #if os(iOS)
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                #endif
+                                Task {
+                                    if await submitGrade(4) {
+                                        await tts.speakAndWait("Marked easy. \(undoPrompt())")
+                                        await startReview()
+                                    } else {
+                                        tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
+                                    }
+                                }
+                            }
+                            .accessibilityLabel("Mark easy")
+                        }
+                        Button("Ask Follow-up") {
+                            Task {
+                                currentNetworkTask?.cancel()
+                                currentNetworkTask = Task {
+                                    await askFollowUp()
+                                }
+                            }
+                        }
+                        .accessibilityLabel("Ask follow-up question")
                     }
                 }
+                
+                Spacer()
             }.padding()
+            
+            // Always-present Skip button - large rectangle at bottom center
+            if case .idle = state {
+                EmptyView()
+            } else {
+                VStack {
+                    Spacer()
+                    Button {
+                        Task { await handleSkip() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "forward.fill")
+                                .font(.title)
+                            Text("SKIP")
+                                .font(.title)
+                                .fontWeight(.bold)
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                        .background(Color.red.opacity(0.9))
+                        .cornerRadius(12)
+                        .shadow(radius: 4)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 30)
+                    .accessibilityLabel("Skip")
+                }
+            }
         }
         .onChange(of: scenePhase) { phase in
             if phase == .background {
@@ -675,24 +886,6 @@ struct ContentView: View {
     // Helper for consistent voice feedback after grading
     private func undoPrompt() -> String {
         return "Say 'undo' to change it."
-    }
-    
-    // Grade button helper
-    private func gradeButton(_ title: String, ease: Int) -> some View {
-        Button {
-            #if os(iOS)
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            #endif
-            Task { await handleGradeButton(ease) }
-        } label: {
-            Text(title)
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.accentColor.opacity(0.12))
-                .cornerRadius(10)
-        }
-        .accessibilityLabel("Mark \(title.lowercased())")
     }
     
     // Helper to validate and trim server URL
@@ -719,33 +912,6 @@ struct ContentView: View {
         case .awaitingAction: return "Awaiting Action"
         case .confirmingGrade: return "Confirming Grade"
         }
-    }
-    
-    private var displayTitle: String {
-        switch state {
-        case .readingFront, .awaitingAnswer: return showBackDuringProcessing ? "Answer" : "Question"
-        case .explaining, .awaitingAction:   return "Answer"
-        case .confirmingGrade:               return "Confirm"
-        case .idle:                          return ""
-        }
-    }
-
-    private var displayText: String {
-        switch state {
-        case .readingFront(_, let front, _):                      return front
-        case .awaitingAnswer(_, let front, let back):             return showBackDuringProcessing ? back : front
-        case .explaining(_, _, let back, _):                      return back
-        case .awaitingAction(_, _, let back):                     return back
-        case .confirmingGrade(_, _, let front, let back):         return back
-        case .idle:                                               return ""
-        }
-    }
-
-    private var shouldShowTranscript: Bool {
-        if case .awaitingAnswer = state {
-            return !stt.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !showBackDuringProcessing
-        }
-        return false
     }
     
     func authorizeSpeechAndMic() {
@@ -791,7 +957,6 @@ struct ContentView: View {
     func startReview() async {
         // Reset prompt flag for new card
         hasPromptedForAnswer = false
-        showBackDuringProcessing = false
         
         // 1) Sanity test: fetch current card with retry and logging
         let config = URLSessionConfiguration.default
@@ -993,7 +1158,6 @@ struct ContentView: View {
             // Normal path: grade with explanation
             stt.stop()
             isListening = false
-            showBackDuringProcessing = true            // show the back while LLM is working
             currentNetworkTask?.cancel()
             currentNetworkTask = Task { await getExplanation(transcript: transcript) }
             return
@@ -1002,81 +1166,6 @@ struct ContentView: View {
         // Fell out of loop - state changed
         stt.stop()
         isListening = false
-    }
-    
-    func handleGradeButton(_ ease: Int) async {
-        // stop IO & cancel network when we're leaving whatever we're doing
-        func stopForTransition(_ willListen: Bool = false) {
-            // keep session active only if we'll immediately listen again
-            stopAllIO(deactivateSession: !willListen)
-            currentNetworkTask?.cancel()
-            currentNetworkTask = nil
-            showBackDuringProcessing = false
-        }
-
-        switch state {
-        case .idle:
-            return
-
-        case .readingFront(let cid, let front, let back):
-            // behave like old SKIP: jump to answer phase (don't submit)
-            stopForTransition(true)
-            state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await startAnswerPhase(cardId: cid, front: front, back: back)
-
-        case .awaitingAnswer(let cid, let front, let back):
-            // Immediate grade + advance (one tap)
-            stopForTransition(false)                 // stop TTS/STT; no immediate re-listen
-            state = .awaitingAction(cardId: cid, front: front, back: back) // to satisfy submitGrade guard
-            let ok = await submitGrade(ease)
-            if ok {
-                await tts.speakAndWait(canonicalName(ease))
-                await startReview()
-            } else {
-                tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
-                // fall back to action so user can retry by voice or buttons
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                await listenForAction()
-            }
-
-        case .explaining(let cid, let front, let back, _):
-            // Also immediate grade while explaining
-            tts.stopSpeaking()
-            stopForTransition(false)
-            state = .awaitingAction(cardId: cid, front: front, back: back)
-            let ok = await submitGrade(ease)
-            if ok {
-                await tts.speakAndWait(canonicalName(ease))
-                await startReview()
-            } else {
-                tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                await listenForAction()
-            }
-
-        case .awaitingAction:
-            // submit immediately and advance
-            let ok = await submitGrade(ease)
-            if ok {
-                await tts.speakAndWait(canonicalName(ease))
-                await startReview()
-            } else {
-                tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
-            }
-
-        case .confirmingGrade(let cid, let easeToConfirm, let front, let back):
-            // Replace confirmation flow: pressing any grade button confirms the pending grade
-            let ok = await submitGrade(easeToConfirm)
-            if ok {
-                await tts.speakAndWait(canonicalName(easeToConfirm))
-                await startReview()
-            } else {
-                tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
-                state = .awaitingAction(cardId: cid, front: front, back: back)
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                await listenForAction()
-            }
-        }
     }
     
     func handleSkip() async {
@@ -1187,7 +1276,6 @@ struct ContentView: View {
                         try? await Task.sleep(nanoseconds: 150_000_000)
                         
                         state = .awaitingAction(cardId: cid, front: front, back: back)
-                        showBackDuringProcessing = false
                         // Optional: comment out this block if you want fastest possible handoff
                         // await tts.speakAndWait("Say a grade like 'grade good' or ask a question.")
                         // try? await Task.sleep(nanoseconds: 50_000_000)
@@ -1208,7 +1296,6 @@ struct ContentView: View {
                     if httpResponse.statusCode == 400 {
                         tts.speak("Server says the request was invalid.")
                         state = .awaitingAction(cardId: cid, front: front, back: back)
-                        showBackDuringProcessing = false
                         // Small settle after TTS
                         try? await Task.sleep(nanoseconds: 150_000_000)
                         await listenForAction()
@@ -1216,7 +1303,6 @@ struct ContentView: View {
                     } else if httpResponse.statusCode == 502 || httpResponse.statusCode == 503 {
                         tts.speak("The grader backend failed. Check the OpenAI key or network on the server.")
                         state = .awaitingAction(cardId: cid, front: front, back: back)
-                        showBackDuringProcessing = false
                         // Small settle after TTS
                         try? await Task.sleep(nanoseconds: 150_000_000)
                         await listenForAction()
@@ -1242,7 +1328,6 @@ struct ContentView: View {
                         await safeSpeakAndWait("The grader took too long to respond. You can try again or say a grade directly.")
                         try? await Task.sleep(nanoseconds: 300_000_000)
                         state = .awaitingAction(cardId: cid, front: front, back: back)
-                        showBackDuringProcessing = false
                         await listenForAction()
                         return
                     }
@@ -1273,7 +1358,6 @@ struct ContentView: View {
         
         // Always transition to a valid state - never leave stuck in awaitingAnswer
         state = .awaitingAction(cardId: cid, front: front, back: back)
-        showBackDuringProcessing = false
         await listenForAction()
     }
 
