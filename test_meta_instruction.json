@@ -1,0 +1,7 @@
+{
+  "cardId": 1759159082583,
+  "transcript": "Mark the card wrong",
+  "question_text": "Which types of functions inside the 5G Core commonly interact with the Network Exposure Function (NEF)?",
+  "reference_text": "The NEF mainly interacts with control-plane and data storage functions in the 5G Core — for example, functions that manage sessions, policies, or subscriber data. The idea is that NEF sits between external applications and these internal functions, so apps don't talk to the core directly."
+}
+

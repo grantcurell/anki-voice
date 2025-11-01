@@ -1,0 +1,956 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		531D81F42EB65D0200F8A66F /* MicPermissionKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 531D81E92EB65D0100F8A66F /* MicPermissionKit.framework */; };
+		531D82B12EB66E6D00F8A66F /* MicPermissionKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 531D81E92EB65D0100F8A66F /* MicPermissionKit.framework */; };
+		531D82B22EB66E6D00F8A66F /* MicPermissionKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 531D81E92EB65D0100F8A66F /* MicPermissionKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		531D80D52EB42E4200F8A66F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 531D80BE2EB42E4100F8A66F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 531D80C52EB42E4100F8A66F;
+			remoteInfo = AnkiVoice;
+		};
+		531D80DF2EB42E4200F8A66F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 531D80BE2EB42E4100F8A66F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 531D80C52EB42E4100F8A66F;
+			remoteInfo = AnkiVoice;
+		};
+		531D81F52EB65D0200F8A66F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 531D80BE2EB42E4100F8A66F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 531D81E82EB65D0100F8A66F;
+			remoteInfo = MicPermissionKit;
+		};
+		531D81F72EB65D0200F8A66F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 531D80BE2EB42E4100F8A66F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 531D80C52EB42E4100F8A66F;
+			remoteInfo = AnkiVoice;
+		};
+		531D81FC2EB65D0200F8A66F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 531D80BE2EB42E4100F8A66F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 531D81E82EB65D0100F8A66F;
+			remoteInfo = MicPermissionKit;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		531D82B32EB66E6D00F8A66F /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				531D82B22EB66E6D00F8A66F /* MicPermissionKit.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		531D80C62EB42E4100F8A66F /* AnkiVoice.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AnkiVoice.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		531D80D42EB42E4200F8A66F /* AnkiVoiceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AnkiVoiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		531D80DE2EB42E4200F8A66F /* AnkiVoiceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AnkiVoiceUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		531D81E92EB65D0100F8A66F /* MicPermissionKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MicPermissionKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		531D81F32EB65D0200F8A66F /* MicPermissionKitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MicPermissionKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		531D817C2EB44BA800F8A66F /* Exceptions for "AnkiVoice" folder in "AnkiVoice" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 531D80C52EB42E4100F8A66F /* AnkiVoice */;
+		};
+		531D82B02EB66D9200F8A66F /* Exceptions for "MicPermissionKit" folder in "MicPermissionKit" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				MicPermissionKit.docc,
+				MicPermissionKit.swift,
+			);
+			publicHeaders = (
+				MicPermissionKit.h,
+				MicPermissionShim.h,
+			);
+			target = 531D81E82EB65D0100F8A66F /* MicPermissionKit */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		531D80C82EB42E4100F8A66F /* AnkiVoice */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				531D817C2EB44BA800F8A66F /* Exceptions for "AnkiVoice" folder in "AnkiVoice" target */,
+			);
+			path = AnkiVoice;
+			sourceTree = "<group>";
+		};
+		531D80D72EB42E4200F8A66F /* AnkiVoiceTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AnkiVoiceTests;
+			sourceTree = "<group>";
+		};
+		531D80E12EB42E4200F8A66F /* AnkiVoiceUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AnkiVoiceUITests;
+			sourceTree = "<group>";
+		};
+		531D81EA2EB65D0100F8A66F /* MicPermissionKit */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				531D82B02EB66D9200F8A66F /* Exceptions for "MicPermissionKit" folder in "MicPermissionKit" target */,
+			);
+			path = MicPermissionKit;
+			sourceTree = "<group>";
+		};
+		531D81F92EB65D0200F8A66F /* MicPermissionKitTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MicPermissionKitTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		531D80C32EB42E4100F8A66F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				531D82B12EB66E6D00F8A66F /* MicPermissionKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D80D12EB42E4200F8A66F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D80DB2EB42E4200F8A66F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D81E62EB65D0100F8A66F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D81F02EB65D0200F8A66F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				531D81F42EB65D0200F8A66F /* MicPermissionKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		531D80BD2EB42E4100F8A66F = {
+			isa = PBXGroup;
+			children = (
+				531D80C82EB42E4100F8A66F /* AnkiVoice */,
+				531D80D72EB42E4200F8A66F /* AnkiVoiceTests */,
+				531D80E12EB42E4200F8A66F /* AnkiVoiceUITests */,
+				531D81EA2EB65D0100F8A66F /* MicPermissionKit */,
+				531D81F92EB65D0200F8A66F /* MicPermissionKitTests */,
+				531D80C72EB42E4100F8A66F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		531D80C72EB42E4100F8A66F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				531D80C62EB42E4100F8A66F /* AnkiVoice.app */,
+				531D80D42EB42E4200F8A66F /* AnkiVoiceTests.xctest */,
+				531D80DE2EB42E4200F8A66F /* AnkiVoiceUITests.xctest */,
+				531D81E92EB65D0100F8A66F /* MicPermissionKit.framework */,
+				531D81F32EB65D0200F8A66F /* MicPermissionKitTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		531D81E42EB65D0100F8A66F /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		531D80C52EB42E4100F8A66F /* AnkiVoice */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 531D80E82EB42E4200F8A66F /* Build configuration list for PBXNativeTarget "AnkiVoice" */;
+			buildPhases = (
+				531D80C22EB42E4100F8A66F /* Sources */,
+				531D80C32EB42E4100F8A66F /* Frameworks */,
+				531D80C42EB42E4100F8A66F /* Resources */,
+				531D82B32EB66E6D00F8A66F /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				531D81FD2EB65D0200F8A66F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				531D80C82EB42E4100F8A66F /* AnkiVoice */,
+			);
+			name = AnkiVoice;
+			productName = AnkiVoice;
+			productReference = 531D80C62EB42E4100F8A66F /* AnkiVoice.app */;
+			productType = "com.apple.product-type.application";
+		};
+		531D80D32EB42E4200F8A66F /* AnkiVoiceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 531D80EB2EB42E4200F8A66F /* Build configuration list for PBXNativeTarget "AnkiVoiceTests" */;
+			buildPhases = (
+				531D80D02EB42E4200F8A66F /* Sources */,
+				531D80D12EB42E4200F8A66F /* Frameworks */,
+				531D80D22EB42E4200F8A66F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				531D80D62EB42E4200F8A66F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				531D80D72EB42E4200F8A66F /* AnkiVoiceTests */,
+			);
+			name = AnkiVoiceTests;
+			productName = AnkiVoiceTests;
+			productReference = 531D80D42EB42E4200F8A66F /* AnkiVoiceTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		531D80DD2EB42E4200F8A66F /* AnkiVoiceUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 531D80EE2EB42E4200F8A66F /* Build configuration list for PBXNativeTarget "AnkiVoiceUITests" */;
+			buildPhases = (
+				531D80DA2EB42E4200F8A66F /* Sources */,
+				531D80DB2EB42E4200F8A66F /* Frameworks */,
+				531D80DC2EB42E4200F8A66F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				531D80E02EB42E4200F8A66F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				531D80E12EB42E4200F8A66F /* AnkiVoiceUITests */,
+			);
+			name = AnkiVoiceUITests;
+			productName = AnkiVoiceUITests;
+			productReference = 531D80DE2EB42E4200F8A66F /* AnkiVoiceUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		531D81E82EB65D0100F8A66F /* MicPermissionKit */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 531D82052EB65D0200F8A66F /* Build configuration list for PBXNativeTarget "MicPermissionKit" */;
+			buildPhases = (
+				531D81E42EB65D0100F8A66F /* Headers */,
+				531D81E52EB65D0100F8A66F /* Sources */,
+				531D81E62EB65D0100F8A66F /* Frameworks */,
+				531D81E72EB65D0100F8A66F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				531D81EA2EB65D0100F8A66F /* MicPermissionKit */,
+			);
+			name = MicPermissionKit;
+			productName = MicPermissionKit;
+			productReference = 531D81E92EB65D0100F8A66F /* MicPermissionKit.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		531D81F22EB65D0200F8A66F /* MicPermissionKitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 531D82062EB65D0200F8A66F /* Build configuration list for PBXNativeTarget "MicPermissionKitTests" */;
+			buildPhases = (
+				531D81EF2EB65D0200F8A66F /* Sources */,
+				531D81F02EB65D0200F8A66F /* Frameworks */,
+				531D81F12EB65D0200F8A66F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				531D81F62EB65D0200F8A66F /* PBXTargetDependency */,
+				531D81F82EB65D0200F8A66F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				531D81F92EB65D0200F8A66F /* MicPermissionKitTests */,
+			);
+			name = MicPermissionKitTests;
+			productName = MicPermissionKitTests;
+			productReference = 531D81F32EB65D0200F8A66F /* MicPermissionKitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		531D80BE2EB42E4100F8A66F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1640;
+				LastUpgradeCheck = 1640;
+				TargetAttributes = {
+					531D80C52EB42E4100F8A66F = {
+						CreatedOnToolsVersion = 16.4;
+					};
+					531D80D32EB42E4200F8A66F = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = 531D80C52EB42E4100F8A66F;
+					};
+					531D80DD2EB42E4200F8A66F = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = 531D80C52EB42E4100F8A66F;
+					};
+					531D81E82EB65D0100F8A66F = {
+						CreatedOnToolsVersion = 16.4;
+						LastSwiftMigration = 1640;
+					};
+					531D81F22EB65D0200F8A66F = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = 531D80C52EB42E4100F8A66F;
+					};
+				};
+			};
+			buildConfigurationList = 531D80C12EB42E4100F8A66F /* Build configuration list for PBXProject "AnkiVoice" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 531D80BD2EB42E4100F8A66F;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 531D80C72EB42E4100F8A66F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				531D80C52EB42E4100F8A66F /* AnkiVoice */,
+				531D80D32EB42E4200F8A66F /* AnkiVoiceTests */,
+				531D80DD2EB42E4200F8A66F /* AnkiVoiceUITests */,
+				531D81E82EB65D0100F8A66F /* MicPermissionKit */,
+				531D81F22EB65D0200F8A66F /* MicPermissionKitTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		531D80C42EB42E4100F8A66F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D80D22EB42E4200F8A66F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D80DC2EB42E4200F8A66F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D81E72EB65D0100F8A66F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D81F12EB65D0200F8A66F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		531D80C22EB42E4100F8A66F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D80D02EB42E4200F8A66F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D80DA2EB42E4200F8A66F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D81E52EB65D0100F8A66F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		531D81EF2EB65D0200F8A66F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		531D80D62EB42E4200F8A66F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 531D80C52EB42E4100F8A66F /* AnkiVoice */;
+			targetProxy = 531D80D52EB42E4200F8A66F /* PBXContainerItemProxy */;
+		};
+		531D80E02EB42E4200F8A66F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 531D80C52EB42E4100F8A66F /* AnkiVoice */;
+			targetProxy = 531D80DF2EB42E4200F8A66F /* PBXContainerItemProxy */;
+		};
+		531D81F62EB65D0200F8A66F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 531D81E82EB65D0100F8A66F /* MicPermissionKit */;
+			targetProxy = 531D81F52EB65D0200F8A66F /* PBXContainerItemProxy */;
+		};
+		531D81F82EB65D0200F8A66F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 531D80C52EB42E4100F8A66F /* AnkiVoice */;
+			targetProxy = 531D81F72EB65D0200F8A66F /* PBXContainerItemProxy */;
+		};
+		531D81FD2EB65D0200F8A66F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 531D81E82EB65D0100F8A66F /* MicPermissionKit */;
+			targetProxy = 531D81FC2EB65D0200F8A66F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		531D80E62EB42E4200F8A66F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		531D80E72EB42E4200F8A66F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		531D80E92EB42E4200F8A66F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = AnkiVoice/AnkiVoice.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.AnkiVoice;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Debug;
+		};
+		531D80EA2EB42E4200F8A66F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = AnkiVoice/AnkiVoice.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.AnkiVoice;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Release;
+		};
+		531D80EC2EB42E4200F8A66F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.AnkiVoiceTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AnkiVoice.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AnkiVoice";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Debug;
+		};
+		531D80ED2EB42E4200F8A66F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.AnkiVoiceTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AnkiVoice.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AnkiVoice";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Release;
+		};
+		531D80EF2EB42E4200F8A66F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.AnkiVoiceUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = AnkiVoice;
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Debug;
+		};
+		531D80F02EB42E4200F8A66F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.AnkiVoiceUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = AnkiVoice;
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Release;
+		};
+		531D82012EB65D0200F8A66F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_MODULE_VERIFIER = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/AnkiVoice/MicPermissionKit";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.MicPermissionKit;
+				PRODUCT_MODULE_NAME = MicPermissionKit;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_MODULE = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				USER_HEADER_SEARCH_PATHS = "$(SRCROOT)/AnkiVoice/MicPermissionKit";
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Debug;
+		};
+		531D82022EB65D0200F8A66F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_MODULE_VERIFIER = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/AnkiVoice/MicPermissionKit";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.MicPermissionKit;
+				PRODUCT_MODULE_NAME = MicPermissionKit;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_MODULE = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				USER_HEADER_SEARCH_PATHS = "$(SRCROOT)/AnkiVoice/MicPermissionKit";
+				VALIDATE_PRODUCT = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Release;
+		};
+		531D82032EB65D0200F8A66F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.MicPermissionKitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AnkiVoice.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AnkiVoice";
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Debug;
+		};
+		531D82042EB65D0200F8A66F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 592A4KY5B8;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Grant.MicPermissionKitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AnkiVoice.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AnkiVoice";
+				VALIDATE_PRODUCT = YES;
+				XROS_DEPLOYMENT_TARGET = 2.5;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		531D80C12EB42E4100F8A66F /* Build configuration list for PBXProject "AnkiVoice" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				531D80E62EB42E4200F8A66F /* Debug */,
+				531D80E72EB42E4200F8A66F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		531D80E82EB42E4200F8A66F /* Build configuration list for PBXNativeTarget "AnkiVoice" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				531D80E92EB42E4200F8A66F /* Debug */,
+				531D80EA2EB42E4200F8A66F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		531D80EB2EB42E4200F8A66F /* Build configuration list for PBXNativeTarget "AnkiVoiceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				531D80EC2EB42E4200F8A66F /* Debug */,
+				531D80ED2EB42E4200F8A66F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		531D80EE2EB42E4200F8A66F /* Build configuration list for PBXNativeTarget "AnkiVoiceUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				531D80EF2EB42E4200F8A66F /* Debug */,
+				531D80F02EB42E4200F8A66F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		531D82052EB65D0200F8A66F /* Build configuration list for PBXNativeTarget "MicPermissionKit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				531D82012EB65D0200F8A66F /* Debug */,
+				531D82022EB65D0200F8A66F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		531D82062EB65D0200F8A66F /* Build configuration list for PBXNativeTarget "MicPermissionKitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				531D82032EB65D0200F8A66F /* Debug */,
+				531D82042EB65D0200F8A66F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 531D80BE2EB42E4100F8A66F /* Project object */;
+}
