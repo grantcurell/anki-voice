@@ -26,7 +26,6 @@ Anki Voice/
 ├── anki-voice-bridge/     # Anki add-on (Python)
 ├── anki-voice-server/     # FastAPI server (Python)  
 ├── anki-voice-ios/        # iOS app (SwiftUI)
-├── setup.sh              # Automated setup script
 └── README.md             # This file
 ```
 
@@ -43,14 +42,12 @@ Anki Voice/
 
 ### Installation
 
-1. **Run the setup script with virtual environments**:
+1. **Set up the server**:
    ```bash
-   ./setup-venv.sh
-   ```
-   
-   Or for basic setup:
-   ```bash
-   ./setup.sh
+   cd anki-voice-server
+   python3 -m venv venv
+   source venv/bin/activate  # On macOS/Linux
+   pip install -r requirements.txt
    ```
 
 2. **Install AnkiConnect**:
