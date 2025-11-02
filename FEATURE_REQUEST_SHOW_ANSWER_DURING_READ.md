@@ -1,3 +1,133 @@
+# Feature Request: Show Answer Text While "Read Answer" is Being Spoken
+
+## Problem Description
+
+Currently, when the user triggers "Read Answer" (either via button or voice command), the app speaks the answer text but **does not display it** in the UI until after the TTS finishes. This means:
+
+1. User presses "Read Answer" button or says "read answer"
+2. App speaks the answer text (TTS)
+3. **During TTS**: UI still shows the question (or previous state)
+4. **After TTS finishes**: State transitions to `.awaitingAction`, which shows the answer
+
+The answer text should be **visually displayed immediately** when TTS starts reading it, not after it finishes.
+
+## Expected Behavior
+
+When `handleReadAnswer()` is called:
+1. **Immediately** transition to a state that displays the answer text (or set a flag)
+2. **Then** speak the answer using TTS
+3. User sees the answer text while hearing it spoken
+4. After TTS finishes, proceed to `.awaitingAction` and start listening
+
+## Current Implementation
+
+Looking at `handleReadAnswer()` (lines 1137-1190), the flow is:
+1. Stop IO and cancel network tasks
+2. Call `await safeSpeakAndWait(back)` - **speaks the answer**
+3. Small delay (50ms)
+4. **Then** set `state = .awaitingAction(cardId: cid, front: front, back: back)` - **shows the answer**
+
+The problem is that the state transition happens **after** speaking, so the UI doesn't update until TTS finishes.
+
+## Proposed Solution
+
+### Option 1: Transition state before speaking (Recommended)
+Transition to `.awaitingAction` **before** calling `safeSpeakAndWait(back)`. This way:
+- `displayText` immediately returns the `back` text (line 755 shows `.awaitingAction` returns `back`)
+- UI updates instantly
+- TTS speaks while answer is visible
+
+### Option 2: Use `showBackDuringProcessing` flag
+Similar to how LLM grading works (line 1051 sets `showBackDuringProcessing = true`):
+- Set `showBackDuringProcessing = true` **before** speaking
+- The `displayText` computed property already handles this (line 753)
+- After speaking, set it back to `false` and transition to `.awaitingAction`
+
+## Implementation Details
+
+### Current `displayText` logic (lines 750-758):
+```swift
+private var displayText: String {
+    switch state {
+    case .readingFront(_, let front, _):                      return front
+    case .awaitingAnswer(_, let front, let back):             return showBackDuringProcessing ? back : front
+    case .explaining(_, _, let back, _):                      return back
+    case .awaitingAction(_, _, let back):                     return back
+    case .confirmingGrade(_, _, let front, let back):         return back
+    case .idle:                                               return ""
+    }
+}
+```
+
+**Key insight**: `.awaitingAction` already displays `back`, and `.awaitingAnswer` displays `back` when `showBackDuringProcessing == true`.
+
+### Recommended Fix
+
+For each case in `handleReadAnswer()`:
+1. Transition to `.awaitingAction` **first** (or set `showBackDuringProcessing = true` if staying in `.awaitingAnswer`)
+2. **Then** call `await safeSpeakAndWait(back)`
+3. State is already correct, proceed to `listenForAction()`
+
+**Example for `.awaitingAnswer` case:**
+```swift
+case .awaitingAnswer(let cid, let front, let back):
+    stopForTransition(true)
+    // Transition state FIRST so UI shows answer immediately
+    state = .awaitingAction(cardId: cid, front: front, back: back)
+    // Then speak while answer is visible
+    await safeSpeakAndWait(back)
+    try? await Task.sleep(nanoseconds: 50_000_000)
+    await listenForAction()
+```
+
+**Example for `.readingFront` case:**
+```swift
+case .readingFront(let cid, let front, let back):
+    stopForTransition(true)
+    // Transition to awaitingAction FIRST
+    state = .awaitingAction(cardId: cid, front: front, back: back)
+    // Speak while answer is visible
+    await safeSpeakAndWait(back)
+    try? await Task.sleep(nanoseconds: 50_000_000)
+    await listenForAction()
+```
+
+Apply the same pattern to all cases: `.explaining`, `.awaitingAction`, `.confirmingGrade`.
+
+## Questions for Expert
+
+1. **State transition timing**: Should we transition to `.awaitingAction` before speaking, or use the `showBackDuringProcessing` flag? `.awaitingAction` seems cleaner since that's the final state anyway.
+
+2. **Visual consistency**: Should the answer be shown during TTS for **all** paths, or just "Read Answer"? Currently, "I don't know" also reads the back but doesn't show it until after (line 1041-1044). Should that be fixed too?
+
+3. **Title display**: When showing the answer during "Read Answer", should the title say "Answer" (which `.awaitingAction` provides via `displayTitle`)?
+
+4. **Edge cases**: What if TTS fails or is interrupted? Should we still transition to `.awaitingAction`, or revert to previous state?
+
+## Current Code Sections
+
+### `handleReadAnswer()` function
+Located at lines 1137-1190. All cases follow the pattern:
+1. `stopForTransition(true)`
+2. `await safeSpeakAndWait(back)` 
+3. `try? await Task.sleep(...)`
+4. `state = .awaitingAction(...)`
+5. `await listenForAction()`
+
+### `displayText` computed property
+Lines 750-758. Handles all state cases and the `showBackDuringProcessing` flag.
+
+### UI display code
+Lines 600-627. Shows `displayTitle` and `displayText` in a card view.
+
+---
+
+## Attached Code
+
+[Full ContentView.swift will be appended below]
+
+### ContentView.swift
+```swift
 // anki-voice-ios / ContentView.swift
 import SwiftUI
 import Speech
@@ -726,13 +856,6 @@ struct ContentView: View {
         guard scenePhase == .active else { return }
         await tts.speakAndWait(text)
     }
-    
-    @MainActor
-    private func showBackNowAndPrepareToListen(_ cid: Int, _ front: String, _ back: String) {
-        // Show the back immediately; this sets the UI to "Answer"+answer text at once.
-        state = .awaitingAction(cardId: cid, front: front, back: back)
-        showBackDuringProcessing = false
-    }
 
     var stateDescription: String {
         switch state {
@@ -1045,10 +1168,9 @@ struct ContentView: View {
             if skipLLMPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
-                // Show answer immediately, then speak
-                showBackNowAndPrepareToListen(cid2, front2, back2)
-                await safeSpeakAndWait(back2)
+                await tts.speakAndWait(back2)
                 try? await Task.sleep(nanoseconds: 50_000_000)
+                state = .awaitingAction(cardId: cid2, front: front2, back: back2)
                 await listenForAction()
                 return
             }
@@ -1158,39 +1280,41 @@ struct ContentView: View {
 
         case .readingFront(let cid, let front, let back):
             stopForTransition(true)
-            showBackNowAndPrepareToListen(cid, front, back)
+            // Go straight to reading the back and then to action
             await safeSpeakAndWait(back)
             try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
             await listenForAction()
 
         case .awaitingAnswer(let cid, let front, let back):
             stopForTransition(true)
-            showBackNowAndPrepareToListen(cid, front, back)
             await safeSpeakAndWait(back)
             try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
             await listenForAction()
 
         case .explaining(let cid, let front, let back, _):
             tts.stopSpeaking() // cancel current explanation
             stopForTransition(true)
-            showBackNowAndPrepareToListen(cid, front, back)
             await safeSpeakAndWait(back) // re-read the official answer
             try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
             await listenForAction()
 
         case .awaitingAction(let cid, let front, let back):
-            // Already showing the back in this state; just speak it again.
+            // Re-read is useful; keeps behavior consistent
             stopForTransition(true)
             await safeSpeakAndWait(back)
             try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
             await listenForAction()
 
         case .confirmingGrade(let cid, _, let front, let back):
             // Cancel confirmation; user wants the answer
             stopForTransition(true)
-            showBackNowAndPrepareToListen(cid, front, back)
             await safeSpeakAndWait(back)
             try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
             await listenForAction()
         }
     }
@@ -1897,3 +2021,4 @@ struct ContentView: View {
         }
     }
 }
+```
