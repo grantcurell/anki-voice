@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>dev.jeet.ankivoice</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/grantcurell/Documents/code/Anki Voice/anki-voice-server/venv/bin/python3</string>
+      <string>-m</string>
+      <string>uvicorn</string>
+      <string>app.main:app</string>
+      <string>--host</string>
+      <string>0.0.0.0</string>
+      <string>--port</string>
+      <string>8000</string>
+      <string>--log-level</string>
+      <string>info</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/grantcurell/Documents/code/Anki Voice/anki-voice-server</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/Users/grantcurell/Documents/code/Anki Voice/anki-voice-server/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/ankivoice.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ankivoice.err</string>
+  </dict>
+</plist>
+

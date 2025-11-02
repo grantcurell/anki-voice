@@ -13,6 +13,3 @@ def normalize_text(s):
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-def token_set(s):
-    return set(normalize_text(s).split())
-

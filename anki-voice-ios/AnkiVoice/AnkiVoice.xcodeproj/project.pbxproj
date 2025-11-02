@@ -76,6 +76,8 @@
 		531D817C2EB44BA800F8A66F /* Exceptions for "AnkiVoice" folder in "AnkiVoice" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"Info-Debug.plist",
+				"Info-Release.plist",
 				Info.plist,
 			);
 			target = 531D80C52EB42E4100F8A66F /* AnkiVoice */;
@@ -84,7 +86,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				MicPermissionKit.docc,
-				MicPermissionKit.swift,
 			);
 			publicHeaders = (
 				MicPermissionKit.h,
@@ -600,7 +601,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				INFOPLIST_FILE = "AnkiVoice/Info-Debug.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -640,7 +641,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = AnkiVoice/Info.plist;
+				INFOPLIST_FILE = "AnkiVoice/Info-Debug.plist";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

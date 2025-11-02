@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional
 import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text
@@ -237,4 +237,9 @@ async def ask_about_card(inp: AskIn):
 
 if __name__ == "__main__":
     import uvicorn
+    # host="0.0.0.0" binds to all network interfaces, including:
+    # - localhost (127.0.0.1)
+    # - local network IPs (e.g., 192.168.x.x)
+    # - VPN/Tailscale IPs (e.g., 100.101.120.23)
+    # - any other network interface on the machine
     uvicorn.run(app, host="0.0.0.0", port=8000)

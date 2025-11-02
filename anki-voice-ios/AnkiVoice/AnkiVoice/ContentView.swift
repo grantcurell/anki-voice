@@ -9,6 +9,56 @@ import AVFAudio          // AVAudioApplication lives here
 import UIKit              // only used by openAppSettings()
 import MicPermissionKit   // your Obj-C shim framework
 #endif
+import OSLog
+
+// MARK: - Tailscale Configuration
+
+let tailnetSuffix = "tail73fcb8.ts.net"
+let defaultDevURL = "http://grants-macbook-air.\(tailnetSuffix):8000"
+
+// MARK: - Logging
+
+#if DEBUG
+// In DEBUG, use print for immediate visibility
+func appLog(_ message: String, category: String = "app") {
+    print("[\(category)] \(message)")
+}
+#else
+// In Release, use OSLog for filtering by subsystem/category
+private let appLogger = Logger(subsystem: "anki.voice", category: "app")
+private let sttLogger = Logger(subsystem: "anki.voice", category: "stt")
+private let ttsLogger = Logger(subsystem: "anki.voice", category: "tts")
+private let networkLogger = Logger(subsystem: "anki.voice", category: "network")
+
+func appLog(_ message: String, category: String = "app") {
+    switch category {
+    case "stt":
+        sttLogger.info("\(message)")
+    case "tts":
+        ttsLogger.info("\(message)")
+    case "network":
+        networkLogger.info("\(message)")
+    default:
+        appLogger.info("\(message)")
+    }
+}
+#endif
+
+// MARK: - JSON Decoding Helpers
+
+extension JSONDecoder {
+    /// Non-throwing decode helper that returns nil on error instead of throwing
+    func decodeIfPresent<T: Decodable>(_ type: T.Type, from data: Data) -> T? {
+        do {
+            return try decode(type, from: data)
+        } catch {
+            #if DEBUG
+            print("[JSON] Decode failed for \(type): \(error)")
+            #endif
+            return nil
+        }
+    }
+}
 
 // MARK: - Permission Management
 
@@ -98,12 +148,6 @@ struct CurrentCard: Decodable {
     let back_text: String?
 }
 
-struct GradeResult: Decodable {
-    let verdict: String
-    let suggested_ease: Int
-    let reasons: [String:AnyDecodable]
-}
-
 struct GradeWithExplanationResponse: Decodable {
     let correct: Bool
     let explanation: String
@@ -116,7 +160,7 @@ struct AskResponse: Decodable {
     let answer: String
 }
 
-struct AnyDecodable: Decodable {
+fileprivate struct AnyDecodable: Decodable {
     enum ValueType {
         case null
         case bool(Bool)
@@ -207,10 +251,18 @@ private func isSiri(_ v: AVSpeechSynthesisVoice) -> Bool {
 }
 
 // Absolute "normal voice" selector - pick once and always use it
-func normalUSVoice() -> AVSpeechSynthesisVoice {
+// Returns optional; nil means use system default (AVSpeechSynthesizer handles this automatically)
+func normalUSVoice() -> AVSpeechSynthesisVoice? {
     let voices = AVSpeechSynthesisVoice.speechVoices()
-    // Cache a guaranteed safe fallback upfront (one acceptable force-unwrap on 'en' which always exists)
-    let any = voices.first ?? AVSpeechSynthesisVoice(language: "en-US") ?? AVSpeechSynthesisVoice(language: "en")!
+    
+    // Fast "any" fallback bundle
+    let any = voices.first
+        ?? AVSpeechSynthesisVoice(language: "en-US")
+        ?? AVSpeechSynthesisVoice(language: "en")
+        ?? AVSpeechSynthesisVoice(language: Locale.current.identifier)
+        ?? AVSpeechSynthesisVoice(language: "en-GB")
+        ?? AVSpeechSynthesisVoice(language: "en-AU")
+        ?? AVSpeechSynthesisVoice(language: "en-CA")
     
     #if DEBUG
     if voices.isEmpty {
@@ -264,16 +316,21 @@ func normalUSVoice() -> AVSpeechSynthesisVoice {
         return en
     }
     
-    // Return cached safe fallback (never crashes)
+    // Return cached fallback (may be nil in simulator/CI; system default used when nil)
     #if DEBUG
-    print("Using cached fallback voice: \(any.name)")
+    if let finalVoice = any {
+        print("Using cached fallback voice: \(finalVoice.name)")
+    } else {
+        print("No voice available; using system default")
+    }
     #endif
     return any
 }
 
 final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     nonisolated(unsafe) let synth = AVSpeechSynthesizer()
-    private var voice: AVSpeechSynthesisVoice = normalUSVoice()
+    @Published private(set) var isSpeaking: Bool = false
+    private var voice: AVSpeechSynthesisVoice? = normalUSVoice()
     var onFinishedSpeaking: (() -> Void)?
 
     // Track whoever is awaiting the current utterance
@@ -292,27 +349,22 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         waitCont?.resume()
     }
     
-    func setPreferredVoice(identifier: String?) {
-        if let id = identifier, let v = AVSpeechSynthesisVoice(identifier: id), !isNovelty(v), v.language == "en-US" {
-            voice = v
-            print("Pinned voice: \(v.name) (\(v.identifier))")
-        } else {
-            voice = normalUSVoice()
-            print("Reset to normal US voice: \(voice.name) (\(voice.identifier))")
-        }
-    }
-    
     func speak(_ text: String) {
+        #if os(iOS)
+        AudioSession.shared.configureForTTS()     // Idempotent; always re-check route
+        #endif
+        
         // TTS queue hygiene: stop any current speech before starting new
         if synth.isSpeaking {
             synth.stopSpeaking(at: .immediate)
         }
         let u = AVSpeechUtterance(string: text)
-        u.voice = voice                  // <- always this one
+        if let v = voice { u.voice = v }   // leave nil → system default
         u.rate = 0.48                    // 0.44–0.52 tends to sound most natural
         u.pitchMultiplier = 1.0          // avoid "cartoon" pitch
         u.volume = 1.0
         synth.speak(u)
+        DispatchQueue.main.async { self.isSpeaking = true }
     }
     
     // Awaitable speak that unblocks if stopSpeaking() is pressed
@@ -338,20 +390,29 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         synth.stopSpeaking(at: .immediate)
         // Resume after stopping to reduce double-resume risk
         cont?.resume()
+        DispatchQueue.main.async { self.isSpeaking = false }
+    }
+    
+    func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart u: AVSpeechUtterance) {
+        DispatchQueue.main.async { self.isSpeaking = true }
     }
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async { [weak self] in
+            self?.isSpeaking = false
             self?.onFinishedSpeaking?()
             self?.onFinishedSpeaking = nil
         }
     }
 }
 
+@MainActor
 final class SpeechSTT: NSObject, ObservableObject {
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     #if os(iOS)
     private let session = AVAudioSession.sharedInstance()
+    private var routeChangeObs: NSObjectProtocol?
+    private var interruptionObs: NSObjectProtocol?
     #endif
     private let engine = AVAudioEngine()
     
@@ -365,21 +426,40 @@ final class SpeechSTT: NSObject, ObservableObject {
     override init() {
         super.init()
         #if os(iOS)
-        // Add route change observer for debugging
-        NotificationCenter.default.addObserver(
+        // Add route change observer for debugging and graceful device handling
+        routeChangeObs = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: .main
-        ) { note in
-            #if DEBUG
+        ) { [weak self] note in
+            guard let self = self else { return }
             let reason = AVAudioSession.RouteChangeReason(rawValue: (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0) ?? .unknown
             let route = AVAudioSession.sharedInstance().currentRoute
+            #if DEBUG
             print("Route change: \(reason), inputs: \(route.inputs.map { $0.portType.rawValue })")
             #endif
+            
+            // Restart STT if device changed while listening (e.g., user inserts AirPods)
+            Task { @MainActor in
+                if (reason == .newDeviceAvailable || reason == .oldDeviceUnavailable), self.isRunning {
+                    #if DEBUG
+                    print("[RouteChange] Device change while STT running, restarting…")
+                    #endif
+                    do {
+                        self.stop()
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        try await self.start()
+                    } catch {
+                        #if DEBUG
+                        print("[RouteChange] Failed to restart STT: \(error)")
+                        #endif
+                    }
+                }
+            }
         }
         
         // Handle audio interruptions
-        NotificationCenter.default.addObserver(
+        interruptionObs = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
             queue: .main
@@ -389,26 +469,25 @@ final class SpeechSTT: NSObject, ObservableObject {
                   let typeVal = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: typeVal) else { return }
             if type == .began {
-                self.stop()
-                // Note: isListening is @Published, update on main thread
-                DispatchQueue.main.async {
-                    // ContentView will update isListening when it observes transcript changes
-                }
+                Task { @MainActor in self.stop() }
             }
         }
         #endif
     }
     
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        #if os(iOS)
+        if let o = routeChangeObs { NotificationCenter.default.removeObserver(o) }
+        if let o = interruptionObs { NotificationCenter.default.removeObserver(o) }
+        #endif
         #if DEBUG
         print("SpeechSTT deinit")
         #endif
-        stop()
+        // DO NOT call stop() here (Main-actor isolated; deinit is nonisolated in Swift Concurrency)
     }
 
     
-    func start() throws {
+    func start() async throws {
         transcript = ""
         isFinal = false
         
@@ -423,24 +502,21 @@ final class SpeechSTT: NSObject, ObservableObject {
         }
         
         #if os(iOS)
-        // Configure session for STT with duplex support (keeps mic hot, echo-cancels)
-        // Prefer HFP over A2DP for lowest-latency duplex with mics
-        try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,                // echo cancel + AGC, great for speech
-            options: [.duckOthers, .allowBluetooth, .defaultToSpeaker]
-        )
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
-        try session.setPreferredSampleRate(44100)
-        try session.setPreferredIOBufferDuration(0.005)
-        
-        // Prefer built-in mic when on speaker (prevents weird input if BT output is connected)
-        if session.currentRoute.outputs.contains(where: { $0.portType == .builtInSpeaker }) {
-            try? session.setPreferredInput(nil) // ensures built-in mic
+        // Hard reset the engine before changing categories (prevents stale 0 Hz formats)
+        if engine.isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
         }
+        engine.reset()
+        
+        AudioSession.shared.configureForSTT()
+        
+        // Brief settle to let AVAudioSession propagate new IO config to the engine
+        try? AVAudioSession.sharedInstance().setActive(true, options: [])
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100 ms
         #endif
         
-        // Create request & task BEFORE starting engine
+        // Recognition request/task - can be created before or after engine start
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         if #available(iOS 13.0, *) {
@@ -448,47 +524,58 @@ final class SpeechSTT: NSObject, ObservableObject {
             if recognizer.supportsOnDeviceRecognition {
                 req.requiresOnDeviceRecognition = true
             }
-            req.taskHint = .confirmation
+            req.taskHint = .dictation
         }
         request = req
         
-        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                if let error = error {
-                    #if DEBUG
-                    print("STT error: \(error)")
-                    #endif
-                    self.stop()
-                    return
-                }
-                if let result = result {
-                    self.transcript = result.bestTranscription.formattedString
-                    if result.isFinal {
-                        self.isFinal = true
-                        // Do NOT stop here; caller controls lifecycle for continuous mode
-                    }
-                }
-            }
-        }
-        
-        // Install tap and start engine
+        // Choose a valid format from the input node
         let input = engine.inputNode
-        let format = input.inputFormat(forBus: 0)  // Use input format for mic tap, not output format
+        // Use outputFormat(forBus:) on inputNode (Apple's samples do this)
+        var format = input.outputFormat(forBus: 0)
         
-        // Remove any stale tap and reset if already running (stability on rare devices)
-        if engine.isRunning {
-            input.removeTap(onBus: 0)
-            engine.stop()
-            engine.reset()
+        // If a device briefly reports 0 Hz, re-read after a short pause
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            format = input.outputFormat(forBus: 0)
         }
         
+        // Fallback to inputFormat if outputFormat still invalid (older API sometimes reports non-zero there first)
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            format = input.inputFormat(forBus: 0)
+        }
+        
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "stt", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid audio format after category switch"])
+        }
+        
+        // Install tap after engine.prepare()
+        engine.prepare()
+        // It's also fine to pass nil to use the node's own format, but we validate format first
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.request?.append(buffer)
         }
         
-        engine.prepare()
         try engine.start()
+        
+        // Create recognition task after engine starts (works either way)
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            guard let self else { return }
+            if let error = error {
+                #if DEBUG
+                print("STT error: \(error)")
+                #endif
+                self.stop()                      // safe: main actor
+                return
+            }
+            if let result = result {
+                self.transcript = result.bestTranscription.formattedString
+                if result.isFinal {
+                    self.isFinal = true
+                    // Do NOT stop here; caller controls lifecycle for continuous mode
+                }
+            }
+        }
+        
         isRunning = true
     }
     
@@ -511,7 +598,8 @@ final class SpeechSTT: NSObject, ObservableObject {
 
 @MainActor
 struct ContentView: View {
-    @AppStorage("serverBaseURL") private var server = "http://192.168.1.153:8000"
+    @AppStorage("serverBaseURL") private var server = defaultDevURL
+    @AppStorage("didRequestMicOnce") private var didRequestMicOnce = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var current: CurrentCard?
     @State private var state: ReviewState = .idle
@@ -525,15 +613,20 @@ struct ContentView: View {
     @State private var hasPromptedForAnswer = false
     @State private var isBusy = false  // debounce Start Review
     @State private var showBackDuringProcessing = false  // show back while LLM is grading
+    @State private var lastErrorSpokenAt: Date?  // rate-limit error TTS
+    @State private var serverHealthStatus: String?  // "Connected" or "Server unreachable"
 
     var canStart: Bool { micAuthorized && speechAuthorized }
     
-    func stopAllIO(deactivateSession: Bool = true) {
+    @MainActor
+    func stopAllIO(deactivateSession: Bool = false) {
         // Stop TTS & unblock any waiters
         tts.stopSpeaking()
         // Stop STT immediately
         stt.stop()
         #if os(iOS)
+        // Only deactivate session on app lifecycle events (background/disappear)
+        // Default is false to preserve routing state between phases
         if deactivateSession {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
@@ -547,6 +640,9 @@ struct ContentView: View {
                 HStack {
                     Spacer()
                     Button(action: {
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        #endif
                         tts.stopSpeaking()
                     }) {
                         Image(systemName: "speaker.slash.fill")
@@ -554,7 +650,6 @@ struct ContentView: View {
                             .foregroundColor(.red)
                             .padding(8)
                     }
-                    .disabled(!tts.synth.isSpeaking)
                 }
                 .padding(.horizontal)
                 
@@ -565,6 +660,26 @@ struct ContentView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
                 
+                // Show validation hint if URL is invalid
+                if validatedBaseURL() == nil && !server.isEmpty {
+                    #if DEBUG
+                    Text("HTTP allowed only for *.\(tailnetSuffix)")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    #else
+                    Text("Release builds require HTTPS")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    #endif
+                }
+                
+                // Show server health status
+                if let status = serverHealthStatus {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundColor(status == "Connected" ? .green : .red)
+                }
+                
                 Button("Authorize Speech & Mic") {
                     authorizeSpeechAndMic()
                 }.disabled(canStart)
@@ -573,6 +688,8 @@ struct ContentView: View {
                     Text(msg)
                         .foregroundColor(.red)
                         .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                     
                     #if os(iOS)
                     Button("Open Settings") {
@@ -580,6 +697,16 @@ struct ContentView: View {
                     }
                     .font(.caption)
                     .foregroundColor(.blue)
+                    .padding(.top, 4)
+                    #endif
+                    
+                    // Additional guidance for users
+                    #if os(iOS)
+                    Text("If Microphone isn't under Settings → AnkiVoice yet, go to Settings → Privacy & Security → Microphone. If AnkiVoice appears there, enable it. If it doesn't appear, tap 'Authorize' again.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                        .padding(.top, 4)
                     #endif
                 } else if !canStart {
                     Text(micAuthorized ? "Speech recognition permission required" : "Microphone permission required")
@@ -588,11 +715,30 @@ struct ContentView: View {
                 }
                 
                 Button("Start Review") {
-                    guard !isBusy else { return }
-                    isBusy = true
+                    #if DEBUG
+                    print("[START] Button tapped. canStart=\(canStart), isBusy=\(isBusy), micAuth=\(micAuthorized), speechAuth=\(speechAuthorized)")
+                    #endif
+                    guard !isBusy else {
+                        #if DEBUG
+                        print("[START] Already busy, ignoring tap")
+                        #endif
+                        return
+                    }
+                    guard canStart else {
+                        #if DEBUG
+                        print("[START] Cannot start: permissions not granted")
+                        #endif
+                        return
+                    }
+                    // startReview() handles isBusy guard/defer internally
                     Task {
+                        #if DEBUG
+                        print("[START] Starting review task...")
+                        #endif
                         await startReview()
-                        isBusy = false
+                        #if DEBUG
+                        print("[START] Review task completed, state=\(state)")
+                        #endif
                     }
                 }
                 .disabled(!canStart || isBusy)
@@ -675,23 +821,126 @@ struct ContentView: View {
                 }
             }.padding()
         }
-        .onChange(of: scenePhase) { phase in
-            if phase == .background {
-                stopAllIO()
-                currentNetworkTask?.cancel()
-                currentNetworkTask = nil
+        .onAppear {
+            // One-time migration: update old IPs to Tailscale MagicDNS hostname
+            let oldIPs = [
+                "http://192.168.1.153:8000",
+                "http://100.101.120.23:8000",
+                "http://10.125.111.70:8000"
+            ]
+            if oldIPs.contains(server) {
+                server = defaultDevURL
+                #if DEBUG
+                print("[MIGRATION] Updated server URL from IP to Tailscale MagicDNS: \(defaultDevURL)")
+                #endif
+            }
+            
+            // Normalize and persist validated URL
+            if let normalized = validatedBaseURL(), normalized != server {
+                server = normalized
+                #if DEBUG
+                print("[NORMALIZE] Persisted normalized URL: \(normalized)")
+                #endif
+            }
+            
+            #if DEBUG
+            print("Server URL:", validatedBaseURL() ?? "<invalid>")
+            #endif
+            
+            // Check server health
+            Task {
+                await checkServerHealth()
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                Task { @MainActor in
+                    stopAllIO(deactivateSession: true)  // Deactivate on app background
+                    currentNetworkTask?.cancel()
+                    currentNetworkTask = nil
+                }
             }
         }
         .onDisappear {
-            stopAllIO()
-            currentNetworkTask?.cancel()
-            currentNetworkTask = nil
+            Task { @MainActor in
+                stopAllIO(deactivateSession: true)  // Deactivate on view disappear
+                currentNetworkTask?.cancel()
+                currentNetworkTask = nil
+            }
         }
     }
 
     // Helper for consistent voice feedback after grading
     private func undoPrompt() -> String {
         return "Say 'undo' to change it."
+    }
+    
+    // Rate-limited error speaking (avoid spam in Release)
+    private func speakErrorIfAllowed(_ message: String, throttleSeconds: Double = 3.0) {
+        let now = Date()
+            if let last = lastErrorSpokenAt, now.timeIntervalSince(last) < throttleSeconds {
+            #if DEBUG
+            let interval = now.timeIntervalSince(last)
+            print("[ERROR] Throttled error message (last spoken \(String(format: "%.1f", interval))s ago): \(message)")
+            #endif
+            return
+        }
+        lastErrorSpokenAt = now
+        tts.speak(message)
+    }
+    
+    // Helper to describe URL errors in user-friendly terms
+    private func describeURLError(_ error: Error) -> String {
+        if let e = error as? URLError {
+            switch e.code {
+            case .cannotConnectToHost:   // -1004 / ECONNREFUSED
+                return "Could not connect. The server isn't running on your Mac (port 8000 refused). Start it with: uvicorn app dot main colon app --host 0 dot 0 dot 0 dot 0 --port 8000"
+            case .timedOut:
+                return "Server timed out. Mac may be asleep or network is flaky."
+            default:
+                break
+            }
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == -1004 {
+            return "Could not connect. The server isn't running on your Mac (port 8000 refused). Start it with: uvicorn app dot main colon app --host 0 dot 0 dot 0 dot 0 --port 8000"
+        }
+        return "Network error."
+    }
+    
+    // Check server health (lightweight preflight)
+    private func checkServerHealth() async {
+        guard let base = validatedBaseURL(), let url = URL(string: "\(base)/health") else {
+            await MainActor.run {
+                self.serverHealthStatus = nil
+            }
+            return
+        }
+        
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 1.0  // Short timeout
+        config.timeoutIntervalForResource = 1.5
+        let session = URLSession(configuration: config)
+        
+        do {
+            let (_, response) = try await session.data(from: url)
+            let ok = (response as? HTTPURLResponse)?.statusCode == 200
+            await MainActor.run {
+                self.serverHealthStatus = ok ? "Connected" : "Server unreachable"
+            }
+        } catch {
+            let description = describeURLError(error)
+            await MainActor.run {
+                // Show concise status; full message will be spoken if user tries to start
+                if description.contains("isn't running") {
+                    self.serverHealthStatus = "Server not running"
+                } else if description.contains("timed out") {
+                    self.serverHealthStatus = "Server timeout"
+                } else {
+                    self.serverHealthStatus = "Server unreachable"
+                }
+            }
+        }
     }
     
     // Grade button helper
@@ -713,12 +962,52 @@ struct ContentView: View {
     }
     
     // Helper to validate and trim server URL
+    // Rejects raw IPs and enforces scheme rules per build type
+    // Auto-appends tailnet suffix for bare device names
     private func validatedBaseURL() -> String? {
-        let base = server.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard base.lowercased().hasPrefix("http://") || base.lowercased().hasPrefix("https://") else {
+        var base = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Prepend scheme when omitted
+        if !base.lowercased().hasPrefix("http://") && !base.lowercased().hasPrefix("https://") {
+            #if DEBUG
+            base = "http://" + base
+            #else
+            base = "https://" + base
+            #endif
+        }
+        
+        guard var comps = URLComponents(string: base), let rawHost = comps.host else { return nil }
+        
+        // If user typed a bare device name (no dots), treat it as MagicDNS host
+        if !rawHost.contains(".") {
+            comps.host = "\(rawHost).\(tailnetSuffix)"
+        }
+        
+        let host = comps.host ?? rawHost
+        
+        // Strict IPv4 check using regex
+        let isIPv4 = host.range(of: #"^(?:\d{1,3}\.){3}\d{1,3}$"#, options: .regularExpression) != nil
+        #if DEBUG
+        if isIPv4 {
+            print("Warning: using raw IP '\(host)'. Prefer MagicDNS like '<device>.\(tailnetSuffix)'.")
+        }
+        #else
+        if isIPv4 { return nil }
+        #endif
+        
+        // Dev: only allow HTTP for our tailnet domain (subdomains only, not root domain)
+        #if DEBUG
+        if comps.scheme?.lowercased() == "http",
+           !host.hasSuffix(".\(tailnetSuffix)") {
+            print("ATS: HTTP allowed only for *.\(tailnetSuffix). You entered \(host).")
             return nil
         }
-        return base
+        #else
+        // In Release, require https
+        if comps.scheme?.lowercased() != "https" { return nil }
+        #endif
+        
+        return comps.string
     }
     
     // Guard against speaking while app not active (prevents odd resumes)
@@ -760,7 +1049,7 @@ struct ContentView: View {
         case .awaitingAnswer(_, let front, let back):             return showBackDuringProcessing ? back : front
         case .explaining(_, _, let back, _):                      return back
         case .awaitingAction(_, _, let back):                     return back
-        case .confirmingGrade(_, _, let front, let back):         return back
+        case .confirmingGrade(_, _, _, let back):         return back
         case .idle:                                               return ""
         }
     }
@@ -775,23 +1064,62 @@ struct ContentView: View {
     func authorizeSpeechAndMic() {
         permissionErrorMessage = nil
         
-        // 1) MIC first (more fundamental permission)
+        // Verify Info.plist keys are present in built app
+        #if DEBUG
+        if Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") == nil {
+            print("ERROR: NSMicrophoneUsageDescription missing from built Info.plist")
+            permissionErrorMessage = "Configuration error: microphone description missing. Check Xcode target membership."
+            return
+        }
+        if Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") == nil {
+            print("ERROR: NSSpeechRecognitionUsageDescription missing from Info.plist")
+        }
+        #endif
+        
+        // CRITICAL FIX: If we've never made a real mic request on this install, do it now.
+        // iOS only shows the Microphone toggle in Settings after the app calls requestRecordPermission at least once.
+        if !didRequestMicOnce {
+            #if DEBUG
+            print("[PERM] First-time mic request (forcing real request to create Settings entry)")
+            #endif
+            MicPermission.request { granted in
+                Task { @MainActor in
+                    self.didRequestMicOnce = true
+                    self.micAuthorized = granted
+                    if granted {
+                        self.requestSpeech()
+                    } else {
+                        // Now that we requested once, Settings should show the toggle
+                        self.permissionErrorMessage = "Microphone access was denied. Enable it in Settings → AnkiVoice → Microphone, or go to Settings → Privacy & Security → Microphone."
+                    }
+                }
+            }
+            return
+        }
+        
+        // Normal path after first request: check state first
         switch MicPermission.state() {
         case .granted:
-            micAuthorized = true
-            requestSpeech()       // chain to speech
+            Task { @MainActor in
+                micAuthorized = true
+                requestSpeech()       // chain to speech
+            }
         case .undetermined:
             MicPermission.request { granted in
-                self.micAuthorized = granted
-                if granted {
-                    self.requestSpeech()
-                } else {
-                    self.permissionErrorMessage = "Microphone access is required. Enable it in Settings."
+                Task { @MainActor in
+                    self.micAuthorized = granted
+                    if granted {
+                        self.requestSpeech()
+                    } else {
+                        self.permissionErrorMessage = "Microphone access was denied. Enable it in Settings → AnkiVoice → Microphone, or go to Settings → Privacy & Security → Microphone."
+                    }
                 }
             }
         case .denied:
-            micAuthorized = false
-            permissionErrorMessage = "Microphone permission was previously denied. Enable it in Settings."
+            Task { @MainActor in
+                micAuthorized = false
+                permissionErrorMessage = "Microphone permission was previously denied. Enable it in Settings → AnkiVoice → Microphone, or go to Settings → Privacy & Security → Microphone."
+            }
         }
     }
     
@@ -813,6 +1141,15 @@ struct ContentView: View {
     }
 
     func startReview() async {
+        // Prevent concurrent runs (covers voice-initiated paths too)
+        if isBusy { return }
+        isBusy = true
+        defer { isBusy = false }
+        
+        #if DEBUG
+        print("[START_REVIEW] Called, current state=\(state)")
+        #endif
+        
         // Reset prompt flag for new card
         hasPromptedForAnswer = false
         showBackDuringProcessing = false
@@ -823,11 +1160,25 @@ struct ContentView: View {
         config.timeoutIntervalForResource = 7.0
         let session = URLSession(configuration: config)
         
-        guard let base = validatedBaseURL(),
-              let url = URL(string: "\(base)/current") else {
+        guard let base = validatedBaseURL() else {
+            #if DEBUG
+            print("[START_REVIEW] ERROR: validatedBaseURL() returned nil. server='\(server)'")
+            #endif
             tts.speak("Invalid server URL.")
             return
         }
+        
+        guard let url = URL(string: "\(base)/current") else {
+            #if DEBUG
+            print("[START_REVIEW] ERROR: Failed to create URL from base='\(base)'")
+            #endif
+            tts.speak("Invalid server URL.")
+            return
+        }
+        
+        #if DEBUG
+        print("[START_REVIEW] Fetching from URL: \(url.absoluteString)")
+        #endif
         
         // Test connectivity first and log the result
         var card: CurrentCard?
@@ -867,9 +1218,49 @@ struct ContentView: View {
                     #endif
                 }
             } catch {
+                // Check if this is a connection refused error (server not running)
+                // URLError.cannotConnectToHost = -1004, also check raw NSError code
+                let nsError = error as NSError
                 #if DEBUG
                 print("Network error fetching /current:", error)
+                print("  Error domain: \(nsError.domain), code: \(nsError.code)")
+                if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    print("  Underlying error code: \(underlying.code)")
+                }
                 #endif
+                
+                let isConnectionRefused: Bool = {
+                    if let urlError = error as? URLError {
+                        return urlError.code == .cannotConnectToHost
+                    }
+                    // NSURLErrorCannotConnectToHost = -1004
+                    if nsError.domain == NSURLErrorDomain && nsError.code == -1004 {
+                        return true
+                    }
+                    // Also check for ECONNREFUSED (61) in underlying error
+                    if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+                       underlying.code == 61 { // ECONNREFUSED
+                        return true
+                    }
+                    return false
+                }()
+                
+                if isConnectionRefused {
+                    #if DEBUG
+                    print("[START_REVIEW] Detected connection refused - server not running")
+                    #endif
+                    // Use the descriptive error helper
+                    let errorMsg = describeURLError(error)
+                    speakErrorIfAllowed(errorMsg)
+                    return
+                }
+                
+                // For other network errors, provide helpful message
+                let errorMsg = describeURLError(error)
+                if !errorMsg.isEmpty && errorMsg != "Network error." {
+                    speakErrorIfAllowed(errorMsg)
+                }
+                
                 if attempt == 0 {
                     try? await Task.sleep(nanoseconds: 500_000_000) // 500ms retry
                 }
@@ -880,22 +1271,42 @@ struct ContentView: View {
               let front = finalCard.front_text,
               let back = finalCard.back_text,
               let cid = finalCard.cardId else {
-            tts.speak("Open Anki on your Mac and start a review.")
+            #if DEBUG
+            print("[START_REVIEW] No valid card available. card=\(card?.status ?? "nil")")
+            #endif
+            
+            // Distinguish between connection errors and no card available
+            if card == nil {
+                // No card means either server error or Anki not ready
+                // Check if we got a network error (would have returned above)
+                // Otherwise assume Anki isn't ready
+                tts.speak("Open Anki on your Mac and start a review.")
+            } else {
+                // Got a response but no valid card
+                tts.speak("No card available. Open Anki and start a review.")
+            }
+            // Even if no card, update state so user knows something happened
+            // Don't leave it stuck in idle
             return
         }
+        
+        #if DEBUG
+        print("[START_REVIEW] Got card: id=\(cid), front='\(front.prefix(50))...', back='\(back.prefix(50))...'")
+        #endif
         
         current = finalCard
         
         // 2) Move to readingFront and speak front
         state = .readingFront(cardId: cid, front: front, back: back)
+        #if DEBUG
+        print("[START_REVIEW] State changed to readingFront")
+        #endif
         
         // Wait for TTS to finish before starting to listen
         await safeSpeakAndWait(front)
         
-        // Explicitly deactivate TTS audio session
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
+        // Don't deactivate session - keep it active and just switch to STT profile when needed
+        // AudioSession will handle the profile switch from TTS to STT
         
         // Minimal settling delay - reduced to 50ms for faster response (max 0.5s total as requested)
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -920,7 +1331,10 @@ struct ContentView: View {
         // Keep STT running continuously; don't flip the audio session in this phase
         do {
             isListening = true
-            try stt.start()
+            #if os(iOS)
+            AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+            #endif
+            try await stt.start()
                 #if DEBUG
                 print("Answer STT started.")
                 #endif
@@ -937,7 +1351,10 @@ struct ContentView: View {
             // If recognizer died, bring it back (resiliency check)
             if !stt.isRunning {
                 do {
-                    try stt.start()
+                    #if os(iOS)
+                    AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                    #endif
+                    try await stt.start()
                     print("[Answer] restarted STT")
                 } catch {
                     print("[Answer] failed to restart STT: \(error)")
@@ -946,38 +1363,61 @@ struct ContentView: View {
                 }
             }
             
-            // Debounce logic: finalize after stability or explicit final
-            var last = ""
-            var unchangedCount = 0
-            let unchangedThreshold = 3         // ~900ms with 300ms ticks
-            let softMinTicks = 2               // don't stop in the first ~600ms
-            var ticks = 0
+            // Debounce logic: finalize after explicit 2s silence window (duration-based)
+            let tickNs: UInt64 = 250_000_000        // 250ms checks (smoother)
+            let silenceWindowNs: UInt64 = 2_000_000_000  // 2.0s required silence
+            let minListenNs: UInt64 = 1_200_000_000      // ignore isFinal before 1.2s total listen
+            let hardCapNs: UInt64 = 15_000_000_000       // hard stop after 15s
+            let started = DispatchTime.now()
+            var lastText = ""
+            var lastChange = started
+            var lastPrintedTick = 0
 
             while case .awaitingAnswer = state {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                ticks += 1
+                try? await Task.sleep(nanoseconds: tickNs)
 
+                let now = DispatchTime.now()
+                let elapsedNs = now.uptimeNanoseconds - started.uptimeNanoseconds
                 let text = stt.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                // Debug breadcrumbs
+                // Debug breadcrumb every ~2.5s
                 #if DEBUG
-                if ticks % 10 == 1 { print("[Answer] live transcript: '\(text)'") }
+                lastPrintedTick += 1
+                if lastPrintedTick % 10 == 1 {
+                    let secs = Double(elapsedNs) / 1e9
+                    print("[Answer] live transcript: '\(text)' (elapsed \(String(format: "%.1f", secs))s)")
+                }
                 #endif
 
-                // No premature exits — just keep listening
-                if stt.isFinal && !text.isEmpty { break }
+                // Track "silence" as "no transcript change"
+                if text != lastText {
+                    lastText = text
+                    lastChange = now
+                }
+                let silenceNs = now.uptimeNanoseconds - lastChange.uptimeNanoseconds
 
-                if text == last {
-                    unchangedCount += 1
-                } else {
-                    unchangedCount = 0
-                    last = text
+                // Primary stop condition: 2.0s of silence and we have some content
+                if !text.isEmpty && silenceNs >= silenceWindowNs {
+                    break
                 }
 
-                // Heuristic: pause detected (stable text) OR sentence end
-                if ticks > softMinTicks {
-                    if (!text.isEmpty && unchangedCount >= unchangedThreshold) { break }
-                    if let lastChar = text.last, [".","?","!"].contains(lastChar) { break }
+                // Treat isFinal only as a hint: honor it after we've listened a bit AND
+                // either have 2.0s silence or at least a short 0.8s pause as a compromise.
+                // If you want strictly 2.0s always, remove the 0.8s clause.
+                if stt.isFinal && !text.isEmpty && elapsedNs >= minListenNs {
+                    if silenceNs >= 800_000_000 || silenceNs >= silenceWindowNs {
+                        break
+                    }
+                }
+
+                // Punctuation heuristic: only if we also observed ~1.2s of quiet
+                if let c = text.last, [".","?","!"].contains(c), silenceNs >= 1_200_000_000 {
+                    break
+                }
+
+                // Hard cap (safety)
+                if elapsedNs >= hardCapNs {
+                    break
                 }
             }
 
@@ -1021,13 +1461,16 @@ struct ContentView: View {
                 stt.stop()
                 isListening = false
 
-                // Satisfy submitGrade() state guard by moving to awaitingAction for this cid/front/back
                 guard case .awaitingAnswer(let cid2, let front2, let back2) = state else { return }
                 state = .awaitingAction(cardId: cid2, front: front2, back: back2)
 
-                let ok = await submitGrade(ease)
+                let ok = await submitGrade(cardId: cid2, ease: ease)
                 if ok {
+                    #if os(iOS)
+                    AudioSession.shared.configureForTTS()
+                    #endif
                     await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
+                    try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                     await startReview()
                 } else {
                     tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
@@ -1056,7 +1499,7 @@ struct ContentView: View {
             // 4) Normal path: grade with explanation
             stt.stop()
             isListening = false
-            showBackDuringProcessing = true            // show the back while LLM is working
+            await MainActor.run { showBackDuringProcessing = true }  // show the back while LLM is working
             currentNetworkTask?.cancel()
             currentNetworkTask = Task { await getExplanation(transcript: transcript) }
             return
@@ -1089,11 +1532,15 @@ struct ContentView: View {
 
         case .awaitingAnswer(let cid, let front, let back):
             // Immediate grade + advance (one tap)
-            stopForTransition(false)                 // stop TTS/STT; no immediate re-listen
-            state = .awaitingAction(cardId: cid, front: front, back: back) // to satisfy submitGrade guard
-            let ok = await submitGrade(ease)
+            stopForTransition(true)                  // we're about to speak, keep session active
+            state = .awaitingAction(cardId: cid, front: front, back: back) // transition state for consistency
+            let ok = await submitGrade(cardId: cid, ease: ease)
             if ok {
-                await tts.speakAndWait(canonicalName(ease))
+                #if os(iOS)
+                AudioSession.shared.configureForTTS()
+                #endif
+                await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
+                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                 await startReview()
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
@@ -1105,11 +1552,15 @@ struct ContentView: View {
         case .explaining(let cid, let front, let back, _):
             // Also immediate grade while explaining
             tts.stopSpeaking()
-            stopForTransition(false)
+            stopForTransition(true)   // keep session active; we'll speak immediately
             state = .awaitingAction(cardId: cid, front: front, back: back)
-            let ok = await submitGrade(ease)
+            let ok = await submitGrade(cardId: cid, ease: ease)
             if ok {
-                await tts.speakAndWait(canonicalName(ease))
+                #if os(iOS)
+                AudioSession.shared.configureForTTS()
+                #endif
+                await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
+                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                 await startReview()
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
@@ -1117,11 +1568,15 @@ struct ContentView: View {
                 await listenForAction()
             }
 
-        case .awaitingAction:
+        case .awaitingAction(let cid, _, _):
             // submit immediately and advance
-            let ok = await submitGrade(ease)
+            let ok = await submitGrade(cardId: cid, ease: ease)
             if ok {
-                await tts.speakAndWait(canonicalName(ease))
+                #if os(iOS)
+                AudioSession.shared.configureForTTS()
+                #endif
+                await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
+                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                 await startReview()
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
@@ -1129,9 +1584,13 @@ struct ContentView: View {
 
         case .confirmingGrade(let cid, let easeToConfirm, let front, let back):
             // Replace confirmation flow: pressing any grade button confirms the pending grade
-            let ok = await submitGrade(easeToConfirm)
+            let ok = await submitGrade(cardId: cid, ease: easeToConfirm)
             if ok {
-                await tts.speakAndWait(canonicalName(easeToConfirm))
+                #if os(iOS)
+                AudioSession.shared.configureForTTS()
+                #endif
+                await tts.speakAndWait("\(canonicalName(easeToConfirm)). \(undoPrompt())")
+                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                 await startReview()
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
@@ -1178,7 +1637,7 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
 
-        case .awaitingAction(let cid, let front, let back):
+        case .awaitingAction(_, _, let back):
             // Already showing the back in this state; just speak it again.
             stopForTransition(true)
             await safeSpeakAndWait(back)
@@ -1195,56 +1654,6 @@ struct ContentView: View {
         }
     }
     
-    func handleSkip() async {
-        // Stop TTS/STT and cancel any in-flight network
-        // Don't deactivate session if we're transitioning to action phase (will start listening immediately)
-        let willTransitionToAction: Bool
-        switch state {
-        case .awaitingAnswer, .explaining, .confirmingGrade:
-            willTransitionToAction = true
-        default:
-            willTransitionToAction = false
-        }
-        
-        stopAllIO(deactivateSession: !willTransitionToAction)
-        currentNetworkTask?.cancel()
-        currentNetworkTask = nil
-
-        switch state {
-        case .readingFront(let cid, let front, let back):
-            // Jump to answer phase
-            state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await startAnswerPhase(cardId: cid, front: front, back: back)
-
-        case .awaitingAnswer(let cid, let front, let back):
-            // EXCEPTION: go straight to grading phase
-            state = .awaitingAction(cardId: cid, front: front, back: back)
-            await tts.speakAndWait("Skipped to grading. Say a grade like 'grade good'.")
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            await listenForAction()
-
-        case .explaining(let cid, let front, let back, _):
-            // Stop explanation, go to grading/listening
-            state = .awaitingAction(cardId: cid, front: front, back: back)
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            await listenForAction()
-
-        case .awaitingAction:
-            // Next card
-            await startReview()
-
-        case .confirmingGrade(let cid, _, let front, let back):
-            // Cancel confirmation, return to action
-            state = .awaitingAction(cardId: cid, front: front, back: back)
-            await tts.speakAndWait("Cancelled. Say a grade or ask a question.")
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            await listenForAction()
-
-        case .idle:
-            break
-        }
-    }
-
     func getExplanation(transcript: String) async {
         if Task.isCancelled { return }
         
@@ -1304,6 +1713,7 @@ struct ContentView: View {
                         
                         state = .awaitingAction(cardId: cid, front: front, back: back)
                         showBackDuringProcessing = false
+                        currentNetworkTask = nil  // Clear task reference after completion
                         // Optional: comment out this block if you want fastest possible handoff
                         // await tts.speakAndWait("Say a grade like 'grade good' or ask a question.")
                         // try? await Task.sleep(nanoseconds: 50_000_000)
@@ -1357,6 +1767,7 @@ struct ContentView: View {
                         #endif
                         await safeSpeakAndWait("The grader took too long to respond. You can try again or say a grade directly.")
                         try? await Task.sleep(nanoseconds: 300_000_000)
+                        currentNetworkTask = nil  // Clear task reference after completion
                         state = .awaitingAction(cardId: cid, front: front, back: back)
                         showBackDuringProcessing = false
                         await listenForAction()
@@ -1377,19 +1788,21 @@ struct ContentView: View {
         print("Failed to reach grader at \(baseURL)/grade-with-explanation after retries")
         print("Make sure:")
         print("1. FastAPI server is running on your Mac")
-        print("2. Server URL is set to your Mac's IP (e.g., http://192.168.1.50:8000)")
+        print("2. Server URL uses Tailscale MagicDNS (e.g., http://<device>.\(tailnetSuffix):8000)")
         print("3. Server is bound to 0.0.0.0 (not 127.0.0.1)")
-        print("4. iPhone and Mac are on the same network")
+        print("4. iPhone and Mac both have Tailscale running")
+        print("5. MagicDNS is enabled in Tailscale admin console")
         #endif
         
         let errorMsg = baseURL.contains("127.0.0.1") || baseURL.contains("localhost") ?
             "Server URL is localhost. Set it to your Mac's IP address like http colon slash slash 192 dot 168 dot 1 dot 50 colon 8000" :
             "I couldn't reach the grader. Check that the server is running and the URL is correct. You can say a grade directly instead."
-        await safeSpeakAndWait(errorMsg)
+        speakErrorIfAllowed(errorMsg)
         
         // Always transition to a valid state - never leave stuck in awaitingAnswer
         state = .awaitingAction(cardId: cid, front: front, back: back)
         showBackDuringProcessing = false
+        currentNetworkTask = nil  // Clear task reference after completion
         await listenForAction()
     }
 
@@ -1407,7 +1820,10 @@ struct ContentView: View {
         if !stt.isRunning {
             do {
                 isListening = true
-                try stt.start()
+                #if os(iOS)
+                AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                #endif
+                try await stt.start()
                 #if DEBUG
                 print("[Action] STT started (continuous)")
                 #endif
@@ -1445,7 +1861,10 @@ struct ContentView: View {
                 // Resilience check: if recognizer silently died, restart it
                 if !stt.isRunning {
                     do {
-                        try stt.start()
+                        #if os(iOS)
+                        AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                        #endif
+                        try await stt.start()
                         print("[Action] restarted STT after detecting it stopped")
                     } catch {
                         print("[Action] failed to restart STT: \(error)")
@@ -1496,11 +1915,15 @@ struct ContentView: View {
             case .grade(let ease, let canonical, let unambiguous):
                 guard case .awaitingAction(let cid, let front, let back) = state else { return }
                 if unambiguous {
-                    let success = await submitGrade(ease)
+                    let success = await submitGrade(cardId: cid, ease: ease)
                     if success {
                         stt.stop()
                         isListening = false
+                        #if os(iOS)
+                        AudioSession.shared.configureForTTS()
+                        #endif
                         await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
+                        try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                         await startReview()
                         return
                     } else {
@@ -1510,12 +1933,15 @@ struct ContentView: View {
                         state = .awaitingAction(cardId: cid, front: front, back: back)
                         try? await Task.sleep(nanoseconds: 150_000_000)
                         // Restart listening after error message
-                        do {
-                            isListening = true
-                            try stt.start()
-                        } catch {
-                            print("Failed to restart STT after error: \(error)")
-                        }
+                         do {
+                             isListening = true
+                             #if os(iOS)
+                             AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                             #endif
+                             try await stt.start()
+                         } catch {
+                             print("Failed to restart STT after error: \(error)")
+                         }
                         continue
                     }
                 } else {
@@ -1554,14 +1980,17 @@ struct ContentView: View {
                     stt.stop()
                     isListening = false
                     await tts.speakAndWait("I didn't get that. Say a grade like 'grade good' or ask a question.")
-                    // After TTS, restart listening; do not deactivate session
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    do {
-                        isListening = true
-                        try stt.start()
-                    } catch {
-                        print("Failed to restart STT after ambiguous: \(error)")
-                    }
+                     // After TTS, restart listening; do not deactivate session
+                     try? await Task.sleep(nanoseconds: 150_000_000)
+                     do {
+                         isListening = true
+                         #if os(iOS)
+                         AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                         #endif
+                         try await stt.start()
+                     } catch {
+                         print("Failed to restart STT after ambiguous: \(error)")
+                     }
                     continue
                 }
             }
@@ -1575,7 +2004,10 @@ struct ContentView: View {
 
         do {
             isListening = true
-            try stt.start()
+            #if os(iOS)
+            AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+            #endif
+            try await stt.start()
         } catch {
             let msg = (error as NSError).localizedDescription
             print("Failed to start STT: \(msg)")
@@ -1594,7 +2026,10 @@ struct ContentView: View {
             // Resilience check: if recognizer silently died, restart it
             if !stt.isRunning {
                 do {
-                    try stt.start()
+                    #if os(iOS)
+                    AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                    #endif
+                    try await stt.start()
                     #if DEBUG
                     print("[Confirm] restarted STT")
                     #endif
@@ -1643,10 +2078,14 @@ struct ContentView: View {
         // STT is already stopped by listenForConfirmation()
         
         if confirmed {
-            let success = await submitGrade(ease)
+            let success = await submitGrade(cardId: cid, ease: ease)
             if success {
+                #if os(iOS)
+                AudioSession.shared.configureForTTS()
+                #endif
                 await tts.speakAndWait("Marked \(canonicalName(ease)). \(undoPrompt())")
                 // Auto-advance to next card after successful grade
+                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
                 await startReview()
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode with a card showing.")
@@ -1686,6 +2125,7 @@ struct ContentView: View {
               let url = URL(string: "\(base)/ask") else {
             tts.speak("Invalid server URL.")
             state = .awaitingAction(cardId: cid, front: front, back: back)
+            currentNetworkTask = nil  // Clear task reference after completion
             try? await Task.sleep(nanoseconds: 150_000_000)
             await listenForAction()
             return
@@ -1709,6 +2149,7 @@ struct ContentView: View {
                     
                     // Small settle delay after TTS
                     try? await Task.sleep(nanoseconds: 150_000_000)
+                    currentNetworkTask = nil  // Clear task reference after completion
                     state = .awaitingAction(cardId: cid, front: front, back: back)
                     await listenForAction()
                     return
@@ -1724,16 +2165,15 @@ struct ContentView: View {
             
             // Small settle delay after TTS
             try? await Task.sleep(nanoseconds: 150_000_000)
+            currentNetworkTask = nil  // Clear task reference after completion
             state = .awaitingAction(cardId: cid, front: front, back: back)
             await listenForAction()
     }
 
-    func submitGrade(_ ease: Int) async -> Bool {
+    func submitGrade(cardId: Int, ease: Int) async -> Bool {
         guard let base = validatedBaseURL(),
               let url = URL(string: "\(base)/submit-grade") else {
-            #if DEBUG
-            print("Invalid submit-grade URL")
-            #endif
+            appLog("Invalid submit-grade URL", category: "network")
             return false
         }
         
@@ -1757,13 +2197,7 @@ struct ContentView: View {
             let error: String?
         }
         
-        guard case .awaitingAction(let cid, _, _) = state else {
-            #if DEBUG
-            print("Cannot submit grade: not in awaitingAction state")
-            #endif
-            return false
-        }
-        let p = Payload(cardId: cid, ease: ease)
+        let p = Payload(cardId: cardId, ease: ease)
         req.httpBody = try? JSONEncoder().encode(p)
         
         do {
@@ -1776,23 +2210,15 @@ struct ContentView: View {
                 
                 if httpResponse.statusCode == 200 {
                     // Check the response body - AnkiConnect returns {"result": true/false}
-                    if let submitResponse = try? JSONDecoder().decode(SubmitResponse.self, from: data) {
+                    let decoder = JSONDecoder()
+                    if let submitResponse = decoder.decodeIfPresent(SubmitResponse.self, from: data) {
                         if let result = submitResponse.result {
                             if result {
-                                #if DEBUG
-                                print("Grade submitted successfully")
-                                #endif
+                                appLog("Grade submitted successfully", category: "network")
                                 return true
                             } else {
-                                #if DEBUG
-                                print("AnkiConnect returned result: false. Error:", submitResponse.error ?? "unknown")
-                                if let error = submitResponse.error {
-                                    print("AnkiConnect error message:", error)
-                                } else {
-                                    print("AnkiConnect returned false - likely no card is showing in Anki reviewer")
-                                    print("Make sure Anki Desktop is open with a card ready for review")
-                                }
-                                #endif
+                                let errorMsg = submitResponse.error ?? "unknown"
+                                appLog("AnkiConnect returned result: false. Error: \(errorMsg)", category: "network")
                                 return false
                             }
                         } else {
@@ -1874,17 +2300,6 @@ struct ContentView: View {
             await startReview()
         } catch {
             tts.speak("Could not undo.")
-        }
-    }
-
-    func getCurrentCardId() -> Int {
-        switch state {
-        case .readingFront(let cid, _, _): return cid
-        case .awaitingAnswer(let cid, _, _): return cid
-        case .explaining(let cid, _, _, _): return cid
-        case .awaitingAction(let cid, _, _): return cid
-        case .confirmingGrade(let cid, _, _, _): return cid
-        case .idle: return 0
         }
     }
 

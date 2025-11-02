@@ -1,12 +1,6 @@
 # app/judge.py
 from .normalize import normalize_text
 
-SNASSI_REQ = {
-    "enhanced mobile broadband": {"embb", "enhanced mobile broadband"},
-    "ultra reliable low latency": {"urllc", "ultra reliable low latency", "ultra-reliable low-latency"},
-    "massive machine type": {"mmtc", "massive machine type", "massive machine-type communications", "massive m2m"},
-}
-
 def list_set_match(transcript:str, canonical:dict):
     txt = normalize_text(transcript)
     hits = set()
