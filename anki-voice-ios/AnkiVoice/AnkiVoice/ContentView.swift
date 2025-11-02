@@ -641,6 +641,23 @@ struct ContentView: View {
                     EmptyView()
                 } else {
                     VStack(spacing: 10) {
+                        // Read Answer button
+                        Button {
+                            #if os(iOS)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                            Task { await handleReadAnswer() }
+                        } label: {
+                            Text("Read Answer")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color.accentColor.opacity(0.18))
+                                .cornerRadius(10)
+                        }
+                        .accessibilityLabel("Read the answer")
+
+                        // Existing grade buttons
                         HStack(spacing: 10) {
                             gradeButton("Again", ease: 1)
                             gradeButton("Hard", ease: 2)
@@ -977,8 +994,46 @@ struct ContentView: View {
                 continue
             }
 
-            // "I don't know" flow
             let lower = transcript.lowercased()
+            
+            // 1) Read Answer phrases (skip LLM, read back)
+            let readAnswerPhrases = [
+                "read answer", "read the answer", "show answer", "tell me the answer"
+            ]
+            if readAnswerPhrases.contains(where: { lower.contains($0) }) {
+                stt.stop()
+                isListening = false
+                await handleReadAnswer()
+                return
+            }
+            
+            // 2) Immediate grade phrases (skip LLM, submit grade)
+            switch IntentParser.parse(lower) {
+            case .grade(let ease, let canonical, let unambiguous) where unambiguous:
+                // We are in .awaitingAnswer; grade and advance immediately
+                stt.stop()
+                isListening = false
+
+                // Satisfy submitGrade() state guard by moving to awaitingAction for this cid/front/back
+                guard case .awaitingAnswer(let cid2, let front2, let back2) = state else { return }
+                state = .awaitingAction(cardId: cid2, front: front2, back: back2)
+
+                let ok = await submitGrade(ease)
+                if ok {
+                    await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
+                    await startReview()
+                } else {
+                    tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    await listenForAction()
+                }
+                return
+
+            default:
+                break
+            }
+            
+            // 3) "I don't know" flow (skip LLM, read back)
             let skipLLMPhrases = ["i don't know", "i have no idea", "i'm not sure", "no idea", "don't know", "i dunno"]
             if skipLLMPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
@@ -990,7 +1045,7 @@ struct ContentView: View {
                 return
             }
 
-            // Normal path: grade with explanation
+            // 4) Normal path: grade with explanation
             stt.stop()
             isListening = false
             showBackDuringProcessing = true            // show the back while LLM is working
@@ -1076,6 +1131,61 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 await listenForAction()
             }
+        }
+    }
+    
+    @MainActor
+    func handleReadAnswer() async {
+        // Helper to keep session active if we're about to listen again
+        func stopForTransition(_ willListen: Bool = true) {
+            stopAllIO(deactivateSession: !willListen)
+            currentNetworkTask?.cancel()
+            currentNetworkTask = nil
+            showBackDuringProcessing = false
+        }
+
+        switch state {
+        case .idle:
+            return
+
+        case .readingFront(let cid, let front, let back):
+            stopForTransition(true)
+            // Go straight to reading the back and then to action
+            await safeSpeakAndWait(back)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
+            await listenForAction()
+
+        case .awaitingAnswer(let cid, let front, let back):
+            stopForTransition(true)
+            await safeSpeakAndWait(back)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
+            await listenForAction()
+
+        case .explaining(let cid, let front, let back, _):
+            tts.stopSpeaking() // cancel current explanation
+            stopForTransition(true)
+            await safeSpeakAndWait(back) // re-read the official answer
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
+            await listenForAction()
+
+        case .awaitingAction(let cid, let front, let back):
+            // Re-read is useful; keeps behavior consistent
+            stopForTransition(true)
+            await safeSpeakAndWait(back)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
+            await listenForAction()
+
+        case .confirmingGrade(let cid, _, let front, let back):
+            // Cancel confirmation; user wants the answer
+            stopForTransition(true)
+            await safeSpeakAndWait(back)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            state = .awaitingAction(cardId: cid, front: front, back: back)
+            await listenForAction()
         }
     }
     
@@ -1422,7 +1532,13 @@ struct ContentView: View {
 
             case .ambiguous:
                 let lower = utterance.lowercased()
-                if lower.contains("undo") || lower.contains("change") || lower.contains("take back") {
+                // Check for "read answer" phrases
+                if ["read answer","read the answer","show answer","tell me the answer"].contains(where: { lower.contains($0) }) {
+                    stt.stop()
+                    isListening = false
+                    await handleReadAnswer()
+                    return
+                } else if lower.contains("undo") || lower.contains("change") || lower.contains("take back") {
                     stt.stop()
                     isListening = false
                     await undoLastGrade()
