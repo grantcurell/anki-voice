@@ -97,9 +97,9 @@ struct MicPermission {
 
     static func request(_ completion: @escaping (Bool) -> Void) {
         #if os(iOS)
-        // iOS: use the shim wrapper
+        // iOS: use the shim wrapper and always bounce to main
         MicPermissionShim.requestRecordPermission { granted in
-            completion(granted)
+            DispatchQueue.main.async { completion(granted) }
         }
         #elseif os(macOS) || os(visionOS)
         if #available(macOS 14.0, visionOS 1.0, *) {
@@ -146,6 +146,58 @@ struct CurrentCard: Decodable {
     let cardId: Int?
     let front_text: String?
     let back_text: String?
+}
+
+// MARK: - Post-grade resync helpers
+extension ContentView {
+    /// GET /current with cache-busting and tight timeouts; returns nil on any error.
+    private func fetchCurrentCard() async -> CurrentCard? {
+        guard let base = validatedBaseURL(),
+              var comps = URLComponents(string: "\(base)/current") else { return nil }
+        // cache-buster so we don't re-read a warm cache
+        comps.queryItems = [URLQueryItem(name: "t", value: String(Date().timeIntervalSince1970))]
+        guard let url = comps.url else { return nil }
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 3.0
+        cfg.timeoutIntervalForResource = 4.0
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: cfg)
+        do {
+            let (data, resp) = try await session.data(from: url)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            return try? JSONDecoder().decode(CurrentCard.self, from: data)
+        } catch { return nil }
+    }
+
+    /// After grading, wait for Anki to publish the next card id, then advance UI to it.
+    private func advanceToNextCard(previousCardId: Int) async {
+        // small settle; Anki may still be flipping
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let maxAttempts = 6
+        for i in 0..<maxAttempts {
+            if Task.isCancelled { return }
+            if let c = await fetchCurrentCard(),
+               c.status == "ok",
+               let cid = c.cardId, let front = c.front_text, let back = c.back_text {
+                if cid != previousCardId {
+                    // We have the next card. Drive normal flow without touching isBusy/startReview().
+                    current = c
+                    #if os(iOS)
+                    await director.handle(.toTTS(stt))
+                    #endif
+                    state = .readingFront(cardId: cid, front: front, back: back)
+                    await safeSpeakAndWait(front)
+                    state = .awaitingAnswer(cardId: cid, front: front, back: back)
+                    await startAnswerPhase(cardId: cid, front: front, back: back)
+                    return
+                }
+            }
+            // short backoff and try again
+            try? await Task.sleep(nanoseconds: 120_000_000 + UInt64(i) * 60_000_000)
+        }
+        // Fallback: if we never saw a new id (deck finished, etc.), use existing path.
+        await startReview()
+    }
 }
 
 struct GradeWithExplanationResponse: Decodable {
@@ -245,7 +297,13 @@ private func isNovelty(_ v: AVSpeechSynthesisVoice) -> Bool {
 }
 
 private func isUS(_ v: AVSpeechSynthesisVoice) -> Bool { v.language == "en-US" }
-private func isHighQuality(_ v: AVSpeechSynthesisVoice) -> Bool { v.quality.rawValue >= 1 } // Premium/Enhanced
+// Replace rawValue heuristic with explicit cases
+private func isHighQuality(_ v: AVSpeechSynthesisVoice) -> Bool {
+    switch v.quality {
+    case .premium, .enhanced: return true
+    default: return false
+    }
+}
 private func isSiri(_ v: AVSpeechSynthesisVoice) -> Bool {
     v.name.localizedCaseInsensitiveContains("siri") || v.identifier.localizedCaseInsensitiveContains("siri")
 }
@@ -337,64 +395,48 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     // Track whoever is awaiting the current utterance
     private var waitCont: CheckedContinuation<Void, Never>?
     
-    // Route fixing state
-    var routeFixQueued = false  // accessible for watchdogs
-    private var utteranceStartedAt: DispatchTime?
-    private var ioAssertInFlight = false
-    
     var isMidUtterance: Bool { synth.isSpeaking }
+    
+    #if os(iOS)
+    weak var director: AudioDirector?
+    #endif
 
     override init() {
         super.init()
         synth.delegate = self
     }
     
+    // Explicit teardown (call from stopAllIO / onDisappear)
+    func teardown() {
+        // Idempotent
+        let cont = waitCont
+        waitCont = nil
+        onFinishedSpeaking = nil
+        synth.stopSpeaking(at: .immediate)
+        cont?.resume()
+        isSpeaking = false
+    }
+    
     deinit {
         #if DEBUG
         print("SpeechTTS deinit")
         #endif
-        synth.stopSpeaking(at: .immediate)
-        waitCont?.resume()
+        // No side-effects here; rely on explicit teardown
     }
     
-    #if os(iOS)
-    private func preflightOutputRouteForTTS() async {
-        if ioAssertInFlight { return }
-        ioAssertInFlight = true
-        defer { ioAssertInFlight = false }
-
-        // if a previous check found earpiece, force now
-        if routeFixQueued {
-            await MainActor.run {
-                AudioSession.shared.forceSpeakerNow()
-            }
-            routeFixQueued = false
-            try? await Task.sleep(nanoseconds: 60_000_000)
-        }
-
-        let session = AVAudioSession.sharedInstance()
-        // fast path: if already OK, bail
-        let okNow = session.currentRoute.outputs.contains {
-            $0.portType == .builtInSpeaker ||
-            $0.portType == .bluetoothA2DP ||
-            $0.portType == .bluetoothLE ||
-            $0.portType == .bluetoothHFP
-        }
-        if okNow { return }
-
-        // one lightweight assert + verify, with tiny settle
-        _ = await AudioSession.shared.configureForTTSVerified(maxAttempts: 2, settleMs: 50)
-    }
-    #endif
     
-    func speak(_ text: String) {
+    // Note: stt reference must be passed from ContentView for director
+    func speak(_ text: String, stt: SpeechSTT? = nil, route: Bool = true) {
         Task { @MainActor in
             #if os(iOS)
-            // stop any keep-alive that might be running
-            AudioSession.shared.cancelKeepAliveIfAny()
-            await preflightOutputRouteForTTS()
-            _ = try? AVAudioSession.sharedInstance().setPreferredInput(nil)
-            try? await Task.sleep(nanoseconds: 50_000_000) // tiny settle only once
+            if route {
+                if let stt = stt, let director = director {
+                    await director.handle(.toTTS(stt))
+                } else if director != nil {
+                    // Even without stt, use director for routing
+                    await director?.handle(.toTTSWithoutSTT)
+                }
+            }
             #endif
 
             if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
@@ -410,17 +452,32 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
     
     // Awaitable speak that unblocks if stopSpeaking() is pressed
-    func speakAndWait(_ text: String) async {
+    // stt parameter required for director integration
+    func speakAndWait(_ text: String, stt: SpeechSTT? = nil) async {
+        #if os(iOS)
+        if let stt = stt, let director = director {
+            await director.handle(.toTTS(stt))
+        } else if director != nil {
+            // Even without stt, use director for routing
+            await director?.handle(.toTTSWithoutSTT)
+        }
+        #endif
+        
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             // if another waiter existed, resume it to avoid leaks
             waitCont?.resume()
             waitCont = cont
             onFinishedSpeaking = { [weak self] in
-                self?.onFinishedSpeaking = nil
-                self?.waitCont?.resume()
-                self?.waitCont = nil
+                guard let self = self else { return }
+                self.onFinishedSpeaking = nil
+                self.waitCont?.resume()
+                self.waitCont = nil
+                
+                // NOTE: STT entry is handled by listenForAnswerContinuous(), not here
+                // This avoids duplicate calls and race conditions
             }
-            speak(text)
+            // Routing already handled above; avoid double-routing.
+            speak(text, stt: stt, route: false)
         }
     }
     
@@ -435,53 +492,58 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         DispatchQueue.main.async { self.isSpeaking = false }
     }
     
-    // Passive route check: delayed, non-interrupting. Queues fix for next utterance if needed.
     func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart u: AVSpeechUtterance) {
-        utteranceStartedAt = .now()
+        // Director already handled routing before speak() was called
         DispatchQueue.main.async { self.isSpeaking = true }
-
-        #if os(iOS)
-        // passive, delayed check; do not stop current utterance
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000) // allow settle
-            let outs = AVAudioSession.sharedInstance().currentRoute.outputs
-            let onSpeakerOrBT = outs.contains {
-                $0.portType == .builtInSpeaker ||
-                $0.portType == .bluetoothA2DP ||
-                $0.portType == .bluetoothLE ||
-                $0.portType == .bluetoothHFP
-            }
-            if !onSpeakerOrBT {
-                // queue a fix for the NEXT utterance, don't interrupt this one
-                self.routeFixQueued = true
-                #if DEBUG
-                print("[RouteFix] Earpiece detected during playback, queued fix for next utterance")
-                #endif
-            }
-        }
-        #endif
     }
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async { [weak self] in
-            self?.isSpeaking = false
-            self?.onFinishedSpeaking?()
-            self?.onFinishedSpeaking = nil
-            self?.waitCont?.resume()
-            self?.waitCont = nil
+            guard let self else { return }
+            self.isSpeaking = false
+            if let cb = self.onFinishedSpeaking {
+                self.onFinishedSpeaking = nil
+                cb()                    // resumes continuation
+            } else {
+                self.waitCont?.resume() // only if no callback was set
+                self.waitCont = nil
+            }
+        }
+    }
+
+    // Ensure continuations are also released on cancellation paths
+    func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel u: AVSpeechUtterance) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isSpeaking = false
+            if let cb = self.onFinishedSpeaking {
+                self.onFinishedSpeaking = nil
+                cb()
+            } else {
+                self.waitCont?.resume()
+                self.waitCont = nil
+            }
         }
     }
 }
 
 @MainActor
 final class SpeechSTT: NSObject, ObservableObject {
+    enum Gate { case open, closed }
+    var micGate: Gate = .closed
+    #if os(iOS)
+    weak var director: AudioDirector?
+    #endif
+    
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     #if os(iOS)
     private let session = AVAudioSession.sharedInstance()
     private var routeChangeObs: NSObjectProtocol?
     private var interruptionObs: NSObjectProtocol?
+    private var availabilityObs: NSObjectProtocol?
     #endif
     private let engine = AVAudioEngine()
+    private var tapInstalled = false
     
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -507,37 +569,18 @@ final class SpeechSTT: NSObject, ObservableObject {
             #endif
             
             Task { @MainActor in
-                // Restart STT if device changed while listening (e.g., user inserts AirPods)
-                if (reason == .newDeviceAvailable || reason == .oldDeviceUnavailable), self.isRunning {
+                // Restart recognition if device changed while listening (e.g., user inserts AirPods)
+                // Don't flip phase in callback; just keep recognition alive
+                if (reason == .newDeviceAvailable || reason == .oldDeviceUnavailable), self.micGate == .open {
                     #if DEBUG
-                    print("[RouteChange] Device change while STT running, restarting…")
+                    print("[RouteChange] Device change while STT active, restarting recognition…")
                     #endif
-                    do {
-                        self.stop()
-                        try? await Task.sleep(nanoseconds: 150_000_000)
-                        try await self.start()
-                    } catch {
-                        #if DEBUG
-                        print("[RouteChange] Failed to restart STT: \(error)")
-                        #endif
-                    }
+                    // Just restart recognition (input will be re-asserted by director on next loop tick)
+                    AVAudioSession.sharedInstance().preferBluetoothHFPInputIfAvailable()
+                    self.stopRecognitionIfRunning()
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    try? await self.startRecognitionIfNeeded()
                 }
-                
-                // Route-change self-heal: if route switched to earpiece during TTS, queue fix
-                // Note: This is queuing a flag, not interrupting, so it's safe even if TTS is speaking
-                // The preflight logic in speak() will check and apply the fix before next utterance
-                #if os(iOS)
-                if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable || reason == .categoryChange {
-                    if AudioSession.shared.phase == .tts,
-                       AVAudioSession.sharedInstance().currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
-                        #if DEBUG
-                        print("[RouteChange] Detected earpiece during TTS phase, queuing fix for next utterance")
-                        #endif
-                        // Note: routeFixQueued is set via a global helper - for now, rely on other watchdogs
-                        // This observer is primarily for STT device changes
-                    }
-                }
-                #endif
             }
         }
         
@@ -552,7 +595,31 @@ final class SpeechSTT: NSObject, ObservableObject {
                   let typeVal = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: typeVal) else { return }
             if type == .began {
-                Task { @MainActor in self.stop() }
+                Task { @MainActor in 
+                    // Stop recognition on interruption (director will reset phase on next transition)
+                    self.stopRecognitionIfRunning()
+                    self.micGate = .closed
+                }
+            }
+        }
+        
+        // React to speech recognizer availability changes (Wi-Fi, network, on-device flips)
+        // Fall back to raw notification name to support SDKs where the typed constant isn't exposed
+        let availabilityName = NSNotification.Name("SFSpeechRecognizerAvailabilityDidChange")
+        availabilityObs = NotificationCenter.default.addObserver(
+            forName: availabilityName,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                if self.micGate == .open {
+                    #if os(iOS)
+                    await self.director?.handle(.assertSTTRunning(self))
+                    #else
+                    try? await self.startRecognitionIfNeeded()
+                    #endif
+                }
             }
         }
         #endif
@@ -562,6 +629,7 @@ final class SpeechSTT: NSObject, ObservableObject {
         #if os(iOS)
         if let o = routeChangeObs { NotificationCenter.default.removeObserver(o) }
         if let o = interruptionObs { NotificationCenter.default.removeObserver(o) }
+        if let o = availabilityObs { NotificationCenter.default.removeObserver(o) }
         #endif
         #if DEBUG
         print("SpeechSTT deinit")
@@ -570,40 +638,59 @@ final class SpeechSTT: NSObject, ObservableObject {
     }
 
     
-    func start() async throws {
-        transcript = ""
-        isFinal = false
+    // Install tap once and keep engine running
+    func installTapOnce() async throws {
+        guard !tapInstalled else { return }
         
-        // Check recognizer availability
+        let input = engine.inputNode
+        var format = input.outputFormat(forBus: 0)
+        
+        // If format is invalid, try again after brief pause
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            format = input.outputFormat(forBus: 0)
+        }
+        
+        // Fallback to inputFormat
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            format = input.inputFormat(forBus: 0)
+        }
+        
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "stt", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid audio format"])
+        }
+        
+        engine.prepare()
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self, self.micGate == .open else { return }
+            self.request?.append(buffer)
+        }
+        
+        try engine.start()
+        tapInstalled = true
+        #if DEBUG
+        print("[SpeechSTT] Tap installed, engine running")
+        #endif
+    }
+    
+    // Start recognition task (separate from engine lifecycle)
+    func startRecognitionIfNeeded() async throws {
+        // If a previous task existed but crashed, make sure we're clean
+        if task != nil && !isRunning {
+            stopRecognitionIfRunning()
+        }
+        guard task == nil else { return }
+        
         guard let recognizer = recognizer, recognizer.isAvailable else {
             throw NSError(domain: "stt", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speech recognizer is not available"])
         }
         
-        // If already running, don't tear down & recreate
-        if isRunning {
-            return
-        }
+        transcript = ""
+        isFinal = false
         
-        #if os(iOS)
-        // Hard reset the engine before changing categories (prevents stale 0 Hz formats)
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-        engine.reset()
-        
-        AudioSession.shared.configureForSTT()
-        
-        // Brief settle to let AVAudioSession propagate new IO config to the engine
-        try? AVAudioSession.sharedInstance().setActive(true, options: [])
-        try? await Task.sleep(nanoseconds: 100_000_000) // 100 ms
-        #endif
-        
-        // Recognition request/task - can be created before or after engine start
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         if #available(iOS 13.0, *) {
-            // Prefer on-device recognition when available (latency win, offline-friendly)
             if recognizer.supportsOnDeviceRecognition {
                 req.requiresOnDeviceRecognition = true
             }
@@ -611,71 +698,65 @@ final class SpeechSTT: NSObject, ObservableObject {
         }
         request = req
         
-        // Choose a valid format from the input node
-        let input = engine.inputNode
-        // Use outputFormat(forBus:) on inputNode (Apple's samples do this)
-        var format = input.outputFormat(forBus: 0)
-        
-        // If a device briefly reports 0 Hz, re-read after a short pause
-        if format.sampleRate <= 0 || format.channelCount == 0 {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            format = input.outputFormat(forBus: 0)
-        }
-        
-        // Fallback to inputFormat if outputFormat still invalid (older API sometimes reports non-zero there first)
-        if format.sampleRate <= 0 || format.channelCount == 0 {
-            format = input.inputFormat(forBus: 0)
-        }
-        
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw NSError(domain: "stt", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid audio format after category switch"])
-        }
-        
-        // Install tap after engine.prepare()
-        engine.prepare()
-        // It's also fine to pass nil to use the node's own format, but we validate format first
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.request?.append(buffer)
-        }
-        
-        try engine.start()
-        
-        // Create recognition task after engine starts (works either way)
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
             if let error = error {
                 #if DEBUG
                 print("STT error: \(error)")
                 #endif
-                self.stop()                      // safe: main actor
+                Task { @MainActor in
+                    self.stopRecognitionIfRunning()
+                }
                 return
             }
             if let result = result {
-                self.transcript = result.bestTranscription.formattedString
-                if result.isFinal {
-                    self.isFinal = true
-                    // Do NOT stop here; caller controls lifecycle for continuous mode
+                Task { @MainActor in
+                    self.transcript = result.bestTranscription.formattedString
+                    if result.isFinal {
+                        self.isFinal = true
+                    }
                 }
             }
         }
         
         isRunning = true
+        #if DEBUG
+        print("[SpeechSTT] Recognition task started")
+        #endif
     }
     
-    func stop() {
+    // Stop recognition task (keep engine running)
+    func stopRecognitionIfRunning() {
         request?.endAudio()
         task?.cancel()
         task = nil
         request = nil
-        
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-        
-        // Don't deactivate session here - let caller handle it to avoid race with TTS
         isFinal = false
         isRunning = false
+        #if DEBUG
+        print("[SpeechSTT] Recognition task stopped")
+        #endif
+    }
+    
+    // Watchdog to check task liveness (for debugging)
+    func ensureTaskLiveness() {
+        if task == nil || !isRunning {
+            #if DEBUG
+            print("[SpeechSTT] Liveness check failed (task nil or not running)")
+            #endif
+        }
+    }
+    
+    // Legacy methods for backward compatibility during transition
+    func start() async throws {
+        try await installTapOnce()
+        try await startRecognitionIfNeeded()
+    }
+    
+    func stop() {
+        stopRecognitionIfRunning()
+        // Do NOT stop engine in normal flow - keep tap installed and engine running
+        // Only stop engine if deactivating session on app background
     }
 }
 
@@ -693,18 +774,25 @@ struct ContentView: View {
     @State private var permissionErrorMessage: String?
     @State private var isListening = false
     @State private var currentNetworkTask: Task<Void, Never>?   // cancel LLM calls
+    @State private var listeningTask: Task<Void, Never>?   // track listening task to cancel it
     @State private var hasPromptedForAnswer = false
     @State private var isBusy = false  // debounce Start Review
+    @State private var isSubmittingGrade = false  // prevent concurrent grade submissions
     @State private var showBackDuringProcessing = false  // show back while LLM is grading
     @State private var lastErrorSpokenAt: Date?  // rate-limit error TTS
     @State private var serverHealthStatus: String?  // "Connected" or "Server unreachable"
+    
+    #if os(iOS)
+    private let director = AudioDirector()
+    @State private var routeWatchToken: NSObjectProtocol?
+    #endif
 
     var canStart: Bool { micAuthorized && speechAuthorized }
     
     @MainActor
     func stopAllIO(deactivateSession: Bool = false) {
-        // Stop TTS & unblock any waiters
-        tts.stopSpeaking()
+        // Stop TTS & unblock any waiters (explicit teardown to avoid dangling continuations)
+        tts.teardown()
         // Stop STT only if it's actually running (avoid unnecessary session churn)
         if stt.isRunning {
             stt.stop()
@@ -933,9 +1021,25 @@ struct ContentView: View {
             #endif
             
             #if os(iOS)
-            // Real-time route watchdog: if we are in TTS phase and route flips to receiver, force speaker immediately
-            // overrideOutputAudioPort is safe to call mid-playback; does not interrupt audio
-            _ = NotificationCenter.default.addObserver(
+            // Configure audio session once at app start (long-lived voiceChat session with AEC)
+            // Inject director into SpeechTTS and SpeechSTT
+            tts.director = director
+            stt.director = director
+            Task { @MainActor in
+                do {
+                    try await director.configureOnce()
+                    // Install STT tap once and keep engine running
+                    try await stt.installTapOnce()
+                } catch {
+                    #if DEBUG
+                    print("[ContentView] Failed to configure audio: \(error)")
+                    #endif
+                }
+            }
+            
+            // Route watchdog: force speaker if iOS flips to earpiece (always, not just during TTS)
+            // This is a safety net; director should handle routing, but this catches edge cases
+            routeWatchToken = NotificationCenter.default.addObserver(
                 forName: AVAudioSession.routeChangeNotification,
                 object: nil,
                 queue: .main
@@ -944,12 +1048,10 @@ struct ContentView: View {
                     let s = AVAudioSession.sharedInstance()
                     let outs = s.currentRoute.outputs
                     let wentReceiver = outs.contains { $0.portType == .builtInReceiver }
-                    if AudioSession.shared.phase == .tts && wentReceiver {
-                        #if DEBUG
-                        print("🚨 WATCHDOG: Receiver detected during TTS, forcing speaker now (non-interrupting)")
-                        #endif
-                        // Force speaker immediately - overrideOutputAudioPort is safe during playback
-                        AudioSession.shared.emergencyForceSpeaker(safeForPlayback: true)
+                    
+                    // Always force speaker if route goes to the earpiece (unless on Bluetooth)
+                    if wentReceiver {
+                        await director.handle(.forceSpeakerIfEarpiece)
                     }
                 }
             }
@@ -971,6 +1073,13 @@ struct ContentView: View {
         }
         .onDisappear {
             Task { @MainActor in
+                #if os(iOS)
+                // Remove route observer
+                if let token = routeWatchToken {
+                    NotificationCenter.default.removeObserver(token)
+                    routeWatchToken = nil
+                }
+                #endif
                 stopAllIO(deactivateSession: true)  // Deactivate on view disappear
                 currentNetworkTask?.cancel()
                 currentNetworkTask = nil
@@ -1092,6 +1201,13 @@ struct ContentView: View {
         }
         
         let host = comps.host ?? rawHost
+        // Explicitly reject IPv6 literals—this app does not support IPv6 endpoints
+        if host.contains(":") {
+            #if DEBUG
+            print("IPv6 host '\(host)' not supported; use IPv4 or MagicDNS.")
+            #endif
+            return nil
+        }
         
         // Strict IPv4 check using regex
         let isIPv4 = host.range(of: #"^(?:\d{1,3}\.){3}\d{1,3}$"#, options: .regularExpression) != nil
@@ -1114,14 +1230,15 @@ struct ContentView: View {
         // In Release, require https
         if comps.scheme?.lowercased() != "https" { return nil }
         #endif
-        
-        return comps.string
+
+        // Return a normalized absolute string
+        return comps.url?.absoluteString
     }
     
     // Guard against speaking while app not active (prevents odd resumes)
     private func safeSpeakAndWait(_ text: String) async {
         guard scenePhase == .active else { return }
-        await tts.speakAndWait(text)
+        await tts.speakAndWait(text, stt: stt)  // speakAndWait routes once; speak(route:false)
     }
     
     @MainActor
@@ -1250,17 +1367,22 @@ struct ContentView: View {
 
     func startReview() async {
         // Prevent concurrent runs (covers voice-initiated paths too)
-        if isBusy { return }
+        if isBusy { 
+            #if DEBUG
+            print("[START_REVIEW] EXITING EARLY - isBusy is true!")
+            #endif
+            return 
+        }
         isBusy = true
         defer { isBusy = false }
         
         #if DEBUG
-        print("[START_REVIEW] Called, current state=\(state)")
+        print("[START_REVIEW] Called, current state=\(state), previous cardId=\(current?.cardId?.description ?? "nil")")
         #endif
         
         // ✅ FIRST THING: Assert routing before any network operations
         #if os(iOS)
-        _ = await AudioSession.shared.configureForTTSVerified()
+        await director.handle(.toTTS(stt))
         #endif
         
         // Reset prompt flag for new card
@@ -1271,24 +1393,8 @@ struct ContentView: View {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 5.0
         config.timeoutIntervalForResource = 7.0
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         let session = URLSession(configuration: config)
-        
-        #if os(iOS)
-        // Optional: keep-alive reassertion during long network calls (cancel when fetch completes)
-        // Store in AudioSession so it can be cancelled before speaking
-        AudioSession.shared.keepAliveTask = Task { @MainActor in
-            while !Task.isCancelled {
-                // Don't reconfigure if TTS is currently speaking
-                guard !tts.isMidUtterance else {
-                    try? await Task.sleep(nanoseconds: 350_000_000)
-                    continue
-                }
-                _ = await AudioSession.shared.configureForTTSVerified(maxAttempts: 1, settleMs: 40)
-                try? await Task.sleep(nanoseconds: 350_000_000)  // every 350ms
-            }
-        }
-        defer { AudioSession.shared.cancelKeepAliveIfAny() }
-        #endif
         
         guard let base = validatedBaseURL() else {
             #if DEBUG
@@ -1420,6 +1526,47 @@ struct ContentView: View {
             return
         }
         
+        // Check if we got the same card we just graded (Anki hasn't advanced yet)
+        // This can happen if we call startReview() too quickly after submitting a grade
+        if let previousCardId = current?.cardId, previousCardId == cid {
+            #if DEBUG
+            print("[START_REVIEW] Got same card ID (\(cid)), Anki hasn't advanced yet. Waiting and retrying...")
+            #endif
+            // Wait a bit longer for Anki to process the grade and advance
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+            
+            // Retry once to get the new card
+            if let retryUrl = URL(string: "\(validatedBaseURL() ?? "")/current") {
+                let retryConfig = URLSessionConfiguration.default
+                retryConfig.timeoutIntervalForRequest = 3.0
+                retryConfig.timeoutIntervalForResource = 5.0
+                let retrySession = URLSession(configuration: retryConfig)
+                
+                if let (retryData, _) = try? await retrySession.data(from: retryUrl),
+                   let retryCard = try? JSONDecoder().decode(CurrentCard.self, from: retryData),
+                   retryCard.status == "ok",
+                   let newCid = retryCard.cardId,
+                   newCid != cid,
+                   let newFront = retryCard.front_text,
+                   let newBack = retryCard.back_text {
+                    // Got a different card - use it
+                    #if DEBUG
+                    print("[START_REVIEW] Retry successful, got new card: \(newCid)")
+                    #endif
+                    current = retryCard
+                    state = .readingFront(cardId: newCid, front: newFront, back: newBack)
+                    await safeSpeakAndWait(newFront)
+                    state = .awaitingAnswer(cardId: newCid, front: newFront, back: newBack)
+                    await startAnswerPhase(cardId: newCid, front: newFront, back: newBack)
+                    return
+                }
+            }
+            // If retry failed, proceed with the same card (might be last card in session)
+            #if DEBUG
+            print("[START_REVIEW] Retry failed or still same card, proceeding with current card")
+            #endif
+        }
+        
         #if DEBUG
         print("[START_REVIEW] Got card: id=\(cid), front='\(front.prefix(50))...', back='\(back.prefix(50))...'")
         #endif
@@ -1428,26 +1575,24 @@ struct ContentView: View {
         
         // ✅ RE-ASSERT after network (session may have changed during fetch)
         #if os(iOS)
-        _ = await AudioSession.shared.configureForTTSVerified()
+        await director.handle(.toTTS(stt))
         #endif
         
         // 2) Move to readingFront and speak front
         state = .readingFront(cardId: cid, front: front, back: back)
         #if DEBUG
-        print("[START_REVIEW] State changed to readingFront")
+        print("[START_REVIEW] ✅ State changed to readingFront, cardId=\(cid), front='\(front.prefix(30))...'")
         #endif
         
         // Wait for TTS to finish before starting to listen
+        // Orchestrator handles TTS→STT transition with quiet fence
         await safeSpeakAndWait(front)
-        
-        // Don't deactivate session - keep it active and just switch to STT profile when needed
-        // AudioSession will handle the profile switch from TTS to STT
-        
-        // Minimal settling delay - reduced to 50ms for faster response (max 0.5s total as requested)
-        try? await Task.sleep(nanoseconds: 50_000_000)
         
         // 3) Move to awaitingAnswer and start answer phase
         state = .awaitingAnswer(cardId: cid, front: front, back: back)
+        #if DEBUG
+        print("[START_REVIEW] ✅ State changed to awaitingAnswer, cardId=\(cid)")
+        #endif
         await startAnswerPhase(cardId: cid, front: front, back: back)
     }
 
@@ -1455,21 +1600,22 @@ struct ContentView: View {
         // Ask once, then keep listening
         if !hasPromptedForAnswer {
             hasPromptedForAnswer = true
-            await tts.speakAndWait("What's your answer?")
-            // do NOT deactivate the audio session here
-            try? await Task.sleep(nanoseconds: 80_000_000) // tiny settle
+            await tts.speakAndWait("What's your answer?", stt: stt)
+            // Orchestrator already handled the TTS→STT transition with quiet fence
         }
         await listenForAnswerContinuous()
     }
 
     func listenForAnswerContinuous() async {
-        // Keep STT running continuously; don't flip the audio session in this phase
+        // Orchestrator manages STT phase transitions; just start recognition if needed
         do {
             isListening = true
             #if os(iOS)
-            AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+            // Enter STT phase (opens mic gate after quiet fence and starts recognition)
+            await director.handle(.toSTT(stt))
+            #else
+            try await stt.startRecognitionIfNeeded()
             #endif
-            try await stt.start()
                 #if DEBUG
                 print("Answer STT started.")
                 #endif
@@ -1485,17 +1631,12 @@ struct ContentView: View {
         while case .awaitingAnswer = state {
             // If recognizer died, bring it back (resiliency check)
             if !stt.isRunning {
-                do {
-                    #if os(iOS)
-                    AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
-                    #endif
-                    try await stt.start()
-                    print("[Answer] restarted STT")
-                } catch {
-                    print("[Answer] failed to restart STT: \(error)")
-                    isListening = false
-                    return
-                }
+                #if os(iOS)
+                // Assert liveness without re-entering STT (no duplicate quiet fence)
+                await director.handle(.assertSTTRunning(stt))
+                #else
+                try? await stt.startRecognitionIfNeeded()
+                #endif
             }
             
             // Debounce logic: finalize after explicit 2s silence window (duration-based)
@@ -1509,6 +1650,16 @@ struct ContentView: View {
             var lastPrintedTick = 0
 
             while case .awaitingAnswer = state {
+                // Check for cancellation
+                if Task.isCancelled {
+                    stt.stop()
+                    isListening = false
+                    return
+                }
+                
+                // Liveness check (debugging)
+                stt.ensureTaskLiveness()
+                
                 try? await Task.sleep(nanoseconds: tickNs)
 
                 let now = DispatchTime.now()
@@ -1595,22 +1746,23 @@ struct ContentView: View {
                 // We are in .awaitingAnswer; grade and advance immediately
                 stt.stop()
                 isListening = false
-
                 guard case .awaitingAnswer(let cid2, let front2, let back2) = state else { return }
+                // Reveal the back in our UI and ensure Anki is on the answer side
+                let prev = state
                 state = .awaitingAction(cardId: cid2, front: front2, back: back2)
-
-                let ok = await submitGrade(cardId: cid2, ease: ease)
+                await ensureAnswerShownIfNeeded(previousState: prev)
+                var ok = await submitGrade(cardId: cid2, ease: ease)
+                if !ok {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    ok = await submitGrade(cardId: cid2, ease: ease)
+                }
                 if ok {
                     #if os(iOS)
-                    _ = await AudioSession.shared.configureForTTSVerified()
+                    await director.handle(.toTTS(stt))
                     #endif
                     await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
-                    try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                    // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                    #if os(iOS)
-                    _ = await AudioSession.shared.configureForTTSVerified()
-                    #endif
-                    await startReview()
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    await advanceToNextCard(previousCardId: cid2)
                 } else {
                     tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
                     try? await Task.sleep(nanoseconds: 150_000_000)
@@ -1670,21 +1822,25 @@ struct ContentView: View {
             await startAnswerPhase(cardId: cid, front: front, back: back)
 
         case .awaitingAnswer(let cid, let front, let back):
-            // Immediate grade + advance (one tap)
-            stopForTransition(true)                  // we're about to speak, keep session active
-            state = .awaitingAction(cardId: cid, front: front, back: back) // transition state for consistency
-            let ok = await submitGrade(cardId: cid, ease: ease)
+            // Show the back, ensure reviewer is on answer side, then grade (one tap)
+            stopForTransition(true)
+            let prev = state
+            // Reveal in our UI immediately so the user sees the answer
+            showBackNowAndPrepareToListen(cid, front, back)
+            await ensureAnswerShownIfNeeded(previousState: prev)
+            // Try grade; if it fails once (e.g., Anki still flipping), retry after a short settle
+            var ok = await submitGrade(cardId: cid, ease: ease)
+            if !ok {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                ok = await submitGrade(cardId: cid, ease: ease)
+            }
             if ok {
                 #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
+                await director.handle(.toTTS(stt))
                 #endif
                 await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
-                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
-                #endif
-                await startReview()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await advanceToNextCard(previousCardId: cid)
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
                 // fall back to action so user can retry by voice or buttons
@@ -1696,7 +1852,7 @@ struct ContentView: View {
             // Also immediate grade while explaining
             // Configure TTS BEFORE stopping to put session in speaker-safe state
             #if os(iOS)
-            _ = await AudioSession.shared.configureForTTSVerified()
+            await director.handle(.toTTS(stt))
             #endif
             tts.stopSpeaking()
             
@@ -1710,18 +1866,12 @@ struct ContentView: View {
             let ok = await submitGrade(cardId: cid, ease: ease)
             if ok {
                 #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()  // re-assert after any internal changes
+                await director.handle(.toTTS(stt))  // re-assert after any internal changes
                 try? await Task.sleep(nanoseconds: 50_000_000)  // 50 ms settle
                 #endif
                 await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
-                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                
-                // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
-                #endif
-                
-                await startReview()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await advanceToNextCard(previousCardId: cid)
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
                 try? await Task.sleep(nanoseconds: 150_000_000)
@@ -1729,19 +1879,26 @@ struct ContentView: View {
             }
 
         case .awaitingAction(let cid, _, _):
+            // Prevent concurrent grade submissions
+            if isSubmittingGrade { return }
+            isSubmittingGrade = true
+            defer { isSubmittingGrade = false }
+            
             // submit immediately and advance
+            // Stop STT and listening before submitting grade (same as voice command path)
+            // Cancel any running listening task
+            listeningTask?.cancel()
+            listeningTask = nil
+            stt.stop()
+            isListening = false
             let ok = await submitGrade(cardId: cid, ease: ease)
             if ok {
                 #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
+                await director.handle(.toTTS(stt))
                 #endif
                 await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
-                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
-                #endif
-                await startReview()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await advanceToNextCard(previousCardId: cid)
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
             }
@@ -1751,15 +1908,11 @@ struct ContentView: View {
             let ok = await submitGrade(cardId: cid, ease: easeToConfirm)
             if ok {
                 #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
+                await director.handle(.toTTS(stt))
                 #endif
                 await tts.speakAndWait("\(canonicalName(easeToConfirm)). \(undoPrompt())")
-                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
-                #endif
-                await startReview()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await advanceToNextCard(previousCardId: cid)
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode.")
                 state = .awaitingAction(cardId: cid, front: front, back: back)
@@ -1872,12 +2025,8 @@ struct ContentView: View {
                         if Task.isCancelled { return }
                         state = .explaining(cardId: cid, front: front, back: back, explanation: result.explanation)
                         
-                        // ✅ Re-assert TTS route right before speaking (critical STT→TTS transition)
-                        #if os(iOS)
-                        _ = await AudioSession.shared.configureForTTSVerified(maxAttempts: 3, settleMs: 70)
-                        #endif
-                        
                         // Wait for explanation to finish speaking
+                        // Orchestrator handles STT→TTS transition (closes mic gate, enters TTS phase)
                         await safeSpeakAndWait(result.explanation)
                         if Task.isCancelled { return }
                         
@@ -1980,6 +2129,9 @@ struct ContentView: View {
     }
 
     func listenForAction() async {
+        // Cancel any previous listening task
+        listeningTask?.cancel()
+        
         // Must be in awaitingAction
         guard case .awaitingAction = state else {
             #if DEBUG
@@ -1987,16 +2139,26 @@ struct ContentView: View {
             #endif
             return
         }
+        
+        // Store this task so it can be cancelled if needed
+        listeningTask = Task {
+            await listenForActionImpl()
+        }
+        await listeningTask?.value
+    }
+    
+    private func listenForActionImpl() async {
 
-        // Do not stop/deactivate here; keep session warm between phases
-        // Check if engine is already running - if so, we can keep it going
+        // Orchestrator manages STT phase transitions
         if !stt.isRunning {
             do {
                 isListening = true
                 #if os(iOS)
-                AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
+                // Enter STT phase (director handles quiet fence and mic gate)
+                await director.handle(.toSTT(stt))
+                #else
+                try await stt.startRecognitionIfNeeded()
                 #endif
-                try await stt.start()
                 #if DEBUG
                 print("[Action] STT started (continuous)")
                 #endif
@@ -2016,6 +2178,11 @@ struct ContentView: View {
 
         // A small inner loop that finalizes chunks but never tears down the engine
         while true {
+            // Exit if listening was stopped (e.g., by button click)
+            if !isListening {
+                return
+            }
+            
             // Re-check state on each pass
             guard case .awaitingAction = state else {
                 print("[Action] State changed, exiting action listener")
@@ -2031,19 +2198,26 @@ struct ContentView: View {
             let minTicks = 2
 
             while true {
+                // Check for cancellation
+                if Task.isCancelled {
+                    stt.stop()
+                    isListening = false
+                    return
+                }
+                
+                // Exit if listening was stopped (e.g., by button click)
+                if !isListening {
+                    return
+                }
+                
                 // Resilience check: if recognizer silently died, restart it
                 if !stt.isRunning {
-                    do {
-                        #if os(iOS)
-                        AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
-                        #endif
-                        try await stt.start()
-                        print("[Action] restarted STT after detecting it stopped")
-                    } catch {
-                        print("[Action] failed to restart STT: \(error)")
-                        isListening = false
-                        return
-                    }
+                    #if os(iOS)
+                    // Assert liveness without re-entering STT
+                    await director.handle(.assertSTTRunning(stt))
+                    #else
+                    try? await stt.startRecognitionIfNeeded()
+                    #endif
                 }
                 
                 try? await Task.sleep(nanoseconds: 300_000_000)
@@ -2093,15 +2267,11 @@ struct ContentView: View {
                         stt.stop()
                         isListening = false
                         #if os(iOS)
-                        _ = await AudioSession.shared.configureForTTSVerified()
+                        await director.handle(.toTTS(stt))
                         #endif
                         await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
-                        try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                        // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                        #if os(iOS)
-                        _ = await AudioSession.shared.configureForTTSVerified()
-                        #endif
-                        await startReview()
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                        await advanceToNextCard(previousCardId: cid)
                         return
                     } else {
                         stt.stop()
@@ -2110,15 +2280,10 @@ struct ContentView: View {
                         state = .awaitingAction(cardId: cid, front: front, back: back)
                         try? await Task.sleep(nanoseconds: 150_000_000)
                         // Restart listening after error message
-                         do {
-                             isListening = true
-                             #if os(iOS)
-                             AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
-                             #endif
-                             try await stt.start()
-                         } catch {
-                             print("Failed to restart STT after error: \(error)")
-                         }
+                        isListening = true
+                        #if os(iOS)
+                        await director.handle(.assertSTTRunning(stt))
+                        #endif
                         continue
                     }
                 } else {
@@ -2131,7 +2296,7 @@ struct ContentView: View {
                     return
                 }
 
-            case .question(let q):
+            case .question(text: let q):
                 stt.stop()
                 isListening = false
                 currentNetworkTask?.cancel()
@@ -2159,15 +2324,11 @@ struct ContentView: View {
                     await tts.speakAndWait("I didn't get that. Say a grade like 'grade good' or ask a question.")
                      // After TTS, restart listening; do not deactivate session
                      try? await Task.sleep(nanoseconds: 150_000_000)
-                     do {
-                         isListening = true
-                         #if os(iOS)
-                         AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
-                         #endif
-                         try await stt.start()
-                     } catch {
-                         print("Failed to restart STT after ambiguous: \(error)")
-                     }
+                     isListening = true
+                     #if os(iOS)
+                     // Director handles STT configuration - just restart recognition
+                     await director.handle(.assertSTTRunning(stt))
+                     #endif
                     continue
                 }
             }
@@ -2175,23 +2336,17 @@ struct ContentView: View {
     }
 
     func listenForConfirmation() async {
-        stt.stop()
+        stt.stopRecognitionIfRunning()
         // Don't deactivate session - keep it active for smooth transition
         try? await Task.sleep(nanoseconds: 100_000_000)
 
-        do {
-            isListening = true
-            #if os(iOS)
-            AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
-            #endif
-            try await stt.start()
-        } catch {
-            let msg = (error as NSError).localizedDescription
-            print("Failed to start STT: \(msg)")
-            tts.speak("Speech recognition failed. Check microphone permission.")
-            isListening = false
-            return
-        }
+        isListening = true
+        #if os(iOS)
+        // Enter STT phase
+        await director.handle(.toSTT(stt))
+        #else
+        try? await stt.startRecognitionIfNeeded()
+        #endif
 
         let started = DispatchTime.now()
         var last = ""
@@ -2200,23 +2355,21 @@ struct ContentView: View {
         let hardTimeout: UInt64 = 3_000_000_000
 
         while true {
+            // Check for cancellation
+            if Task.isCancelled {
+                stt.stopRecognitionIfRunning()
+                isListening = false
+                return
+            }
+            
             // Resilience check: if recognizer silently died, restart it
             if !stt.isRunning {
-                do {
-                    #if os(iOS)
-                    AudioSession.shared.configureForSTT()   // ensure duplex voiceChat profile
-                    #endif
-                    try await stt.start()
-                    #if DEBUG
-                    print("[Confirm] restarted STT")
-                    #endif
-                } catch {
-                    #if DEBUG
-                    print("[Confirm] failed to restart STT: \(error)")
-                    #endif
-                    isListening = false
-                    return
-                }
+                #if os(iOS)
+                // Assert liveness without re-entering STT
+                await director.handle(.assertSTTRunning(stt))
+                #else
+                try? await stt.startRecognitionIfNeeded()
+                #endif
             }
             
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -2258,16 +2411,11 @@ struct ContentView: View {
             let success = await submitGrade(cardId: cid, ease: ease)
             if success {
                 #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
+                await director.handle(.toTTS(stt))
                 #endif
                 await tts.speakAndWait("Marked \(canonicalName(ease)). \(undoPrompt())")
-                // Auto-advance to next card after successful grade
-                try? await Task.sleep(nanoseconds: 80_000_000) // small settle
-                // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
-                #if os(iOS)
-                _ = await AudioSession.shared.configureForTTSVerified()
-                #endif
-                await startReview()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await advanceToNextCard(previousCardId: cid)
             } else {
                 tts.speak("Failed to submit grade. Make sure Anki Desktop is in review mode with a card showing.")
                 state = .idle
@@ -2328,7 +2476,7 @@ struct ContentView: View {
                     
                     // ✅ Re-assert TTS route right before speaking (critical STT→TTS transition)
                     #if os(iOS)
-                    _ = await AudioSession.shared.configureForTTSVerified(maxAttempts: 3, settleMs: 70)
+                    await director.handle(.toTTS(stt))
                     #endif
                     
                     await safeSpeakAndWait(result.answer)
@@ -2350,7 +2498,7 @@ struct ContentView: View {
             
             // ✅ Re-assert TTS route right before speaking (critical STT→TTS transition)
             #if os(iOS)
-            _ = await AudioSession.shared.configureForTTSVerified(maxAttempts: 3, settleMs: 70)
+            await director.handle(.toTTS(stt))
             #endif
             
             await safeSpeakAndWait("Sorry, I couldn't answer that. Ask again or grade.")
@@ -2369,10 +2517,10 @@ struct ContentView: View {
             return false
         }
         
-        // Short timeout for commands (2-3s)
+        // Short timeout for commands; a little headroom helps avoid false "fail"
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 2.0
-        config.timeoutIntervalForResource = 3.0
+        config.timeoutIntervalForRequest = 3.5
+        config.timeoutIntervalForResource = 4.5
         let session = URLSession(configuration: config)
         
         var req = URLRequest(url: url)
@@ -2487,11 +2635,14 @@ struct ContentView: View {
         
         do {
             _ = try await session.data(for: req)
-            tts.speak("Undid that.")
-            // Try to fetch current card again
-            // ✅ ASSERT ROUTING BEFORE CALLING startReview() (seal the network gap)
+            // Await speech before starting next review to avoid overlap
             #if os(iOS)
-            _ = await AudioSession.shared.configureForTTSVerified()
+            await director.handle(.toTTS(stt))
+            #endif
+            await tts.speakAndWait("Undid that.", stt: stt)
+            // Try to fetch current card again
+            #if os(iOS)
+            await director.handle(.toTTS(stt))
             #endif
             await startReview()
         } catch {
@@ -2507,4 +2658,25 @@ struct ContentView: View {
         default: return "easy"
         }
     }
+    
+    // Ensure Anki reviewer is showing the answer before we send a grade.
+    // If /show-answer exists on your FastAPI server, we call it; otherwise we
+    // fall back to a short settle delay after revealing the back in the UI.
+    private func ensureAnswerShownIfNeeded(previousState: ReviewState) async {
+        guard case .awaitingAnswer = previousState else { return }
+        // Best-effort server nudge (optional endpoint)
+        if let base = validatedBaseURL(),
+           let url = URL(string: "\(base)/show-answer") {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            let cfg = URLSessionConfiguration.default
+            cfg.timeoutIntervalForRequest = 1.0
+            cfg.timeoutIntervalForResource = 1.5
+            let session = URLSession(configuration: cfg)
+            _ = try? await session.data(for: req)
+        }
+        // Give Anki a moment to flip; also avoids racing STT/TTS routing.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
 }
+

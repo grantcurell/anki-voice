@@ -57,37 +57,13 @@ final class AudioSession {
         forceSpeakerNow()
     }
 
-    // BLOCKING, verified config for TTS. More stubborn to survive STT→TTS handoff race.
-    func configureForTTSVerified(maxAttempts: Int = 3, settleMs: UInt64 = 80) async -> Bool {
-        for _ in 0..<maxAttempts {
-            do {
-                try s.setCategory(.playAndRecord,
-                                  mode: .spokenAudio,
-                                  options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
-                try s.setActive(true, options: [])
-            } catch {
-                // continue
-            }
-            // Clear preferred input to avoid receiver heuristics
-            try? s.setPreferredInput(nil)
-            // Force speaker only if not on Bluetooth
-            if !isBTOutput(s.currentRoute.outputs) {
-                _ = try? s.overrideOutputAudioPort(.speaker)
-            }
-            try? await Task.sleep(nanoseconds: settleMs * 1_000_000)
-
-            let outs = s.currentRoute.outputs
-            let ok = outs.contains { port in
-                let pt = port.portType
-                return pt == .builtInSpeaker || pt == .bluetoothA2DP || pt == .bluetoothLE || pt == .bluetoothHFP
-            }
-            if ok {
-                phase = .tts
-                return true
-            }
-        }
+    // Simplified shim: uses voiceChat mode for both TTS and STT (with AEC)
+    @discardableResult
+    func configureForTTSVerified(maxAttempts: Int = 1, settleMs: UInt64 = 40) async -> Bool {
+        try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try? s.setActive(true)
         phase = .tts
-        return false
+        return true
     }
     
     func cancelKeepAliveIfAny() {
@@ -95,34 +71,11 @@ final class AudioSession {
         keepAliveTask = nil
     }
 
-    // Light wrapper for STT (unchanged from your logic)
+    // Simplified shim: uses voiceChat mode (orchestrator handles session config, this is just for legacy calls)
     func configureForSTT() {
-        do {
-            try s.setCategory(.playAndRecord,
-                              mode: .voiceChat,
-                              options: [.allowBluetooth, .allowBluetoothA2DP, .mixWithOthers])
-            try s.setActive(true, options: [])
-            // Force built-in speaker only when not on BT
-            let outs = s.currentRoute.outputs
-            if !isBTOutput(outs) {
-                _ = try? s.overrideOutputAudioPort(.speaker)
-            }
-            // Prefer built-in mic when using speaker:
-            if outs.contains(where: { $0.portType == .builtInSpeaker }) {
-                try? s.setPreferredInput(nil)
-            }
-            // Optional but stabilizes input format on some devices
-            try? s.setPreferredSampleRate(48_000)
-            try? s.setPreferredIOBufferDuration(0.005)
-            phase = .stt
-            #if DEBUG
-            logRoute(prefix: "STT")
-            #endif
-        } catch {
-            #if DEBUG
-            print("AudioSession STT config failed:", error)
-            #endif
-        }
+        try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
+        try? s.setActive(true)
+        phase = .stt
     }
 
     // Emergency, used by watchdog. Uses the canonical order for maximum reliability.
