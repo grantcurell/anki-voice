@@ -823,30 +823,47 @@ struct ContentView: View {
                 .padding(.horizontal)
                 
                 Text("Anki Voice").font(.title)
-                TextField("Server Base URL", text: $server)
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled(true)
                 
-                // Show validation hint if URL is invalid
-                if validatedBaseURL() == nil && !server.isEmpty {
-                    #if DEBUG
-                    Text("HTTP allowed only for *.\(tailnetSuffix)")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                    #else
-                    Text("Release builds require HTTPS")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                    #endif
+                // Show server URL input only when idle
+                if case .idle = state {
+                    TextField("Server Base URL", text: $server)
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    
+                    // Show validation hint if URL is invalid
+                    if validatedBaseURL() == nil && !server.isEmpty {
+                        #if DEBUG
+                        Text("HTTP allowed only for *.\(tailnetSuffix)")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        #else
+                        Text("Release builds require HTTPS")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        #endif
+                    }
                 }
                 
-                // Show server health status
-                if let status = serverHealthStatus {
-                    Text(status)
-                        .font(.caption2)
-                        .foregroundColor(status == "Connected" ? .green : .red)
+                // Show server health status (always visible when not idle, or when idle if set)
+                if case .idle = state {
+                    if let status = serverHealthStatus {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundColor(status == "Connected" ? .green : .red)
+                    }
+                } else {
+                    // Show connection status during review
+                    if let status = serverHealthStatus {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundColor(status == "Connected" ? .green : .red)
+                    } else {
+                        Text("Checking connection...")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
                 }
                 
                 Button("Authorize Speech & Mic") {
@@ -920,20 +937,28 @@ struct ContentView: View {
                                 .font(.headline)
                                 .foregroundColor(.secondary)
                         }
-                        Text(displayText)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        // Make answer text scrollable
+                        ScrollView {
+                            Text(displayText)
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 300) // Limit height so it doesn't take over screen
 
                         if shouldShowTranscript {
                             Divider().opacity(0.3)
-                            Text(stt.transcript)
-                                .font(.body)
-                                .foregroundColor(.orange)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityLabel("Your answer")
+                            ScrollView {
+                                Text(stt.transcript)
+                                    .font(.body)
+                                    .foregroundColor(.orange)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .accessibilityLabel("Your answer")
+                            }
+                            .frame(maxHeight: 150) // Limit transcript height too
                         }
         }
         .padding()
