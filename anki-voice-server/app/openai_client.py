@@ -48,23 +48,22 @@ async def grade_with_gpt5(question: str, reference: str, transcript: str) -> dic
         except Exception:
             return {"correct": False, "missing": [], "extras": [], "confidence": 0.0, "short_reason": "parse-error"}
 
-async def grade_with_gpt5_explanation(question: str, reference: str, transcript: str) -> dict:
+async def grade_with_gpt5_explanation(question: str, reference: str, transcript: str) -> str:
     """
-    Returns STRICT JSON:
-      { correct: bool, explanation: string, confidence: 0..1,
-        missing: string[], extras: string[] }
+    Returns a brief explanation of what was wrong, if anything.
+    Returns empty string if the answer is correct.
     """
     system = (
-        "You evaluate spoken answers to flashcards and explain the reasoning. "
-        "Return STRICT JSON with keys: correct (bool), explanation (string), "
-        "confidence (0..1), missing (array of strings), extras (array of strings). "
-        "Focus on explaining what was right/wrong, not suggesting grades."
+        "You evaluate spoken answers to flashcards. "
+        "Provide a brief explanation of what was wrong, if anything. "
+        "If the answer is correct, respond with an empty string or just say it's correct. "
+        "Keep explanations concise."
     )
     user = (
         f"Question: {question}\n"
         f"Reference answer: {reference}\n"
         f"Spoken transcript: {transcript}\n"
-        "Explain what was correct or incorrect about this answer. Be detailed and educational."
+        "Briefly explain what was incorrect about this answer, if anything. If correct, just say it's correct."
     )
     payload = {
         "model": OPENAI_MODEL,
@@ -90,33 +89,23 @@ async def grade_with_gpt5_explanation(question: str, reference: str, transcript:
                         t = part.get("text")
                         if t: chunks.append(t)
             text = "\n".join(chunks)
-
-        import re, json as pyjson
-        m = re.search(r"\{.*\}", text, re.S)
-        try:
-            return pyjson.loads(m.group(0)) if m else {
-                "correct": False, "explanation": "No JSON returned.",
-                "confidence": 0.0, "missing": [], "extras": []
-            }
-        except Exception:
-            return {
-                "correct": False, "explanation": "Parse error.",
-                "confidence": 0.0, "missing": [], "extras": []
-            }
+        
+        # Return the explanation text directly, stripping whitespace
+        return text.strip() or "Correct."
 
 async def answer_followup(question_text: str, reference_text: str, user_question: str) -> str:
     """
-    Returns a short, clear textual explanation that uses the card's front/back as context.
+    Returns a brief textual explanation that uses the card's front/back as context.
     """
     system = (
-        "You are a concise tutor. Answer follow-up questions using the provided card context. "
-        "Be concrete and brief. If the follow-up asks beyond the card, answer but be clear about scope."
+        "You answer follow-up questions about flashcards. "
+        "Be brief and direct. Use the card context provided."
     )
     user = (
         f"Card front: {question_text}\n"
         f"Card back (reference): {reference_text}\n"
-        f"User follow-up question: {user_question}\n"
-        "Answer succinctly (3-6 sentences)."
+        f"User question: {user_question}\n"
+        "Provide a brief answer (1-3 sentences)."
     )
     payload = {
         "model": OPENAI_MODEL,

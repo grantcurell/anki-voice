@@ -166,39 +166,22 @@ async def api_grade_with_explanation(inp: GradeIn):
 
     # Test mode: return dummy response without calling LLM
     if not USE_GPT5:
-        return {
-            "correct": True,
-            "explanation": "Test mode: looks correct.",
-            "confidence": 0.9,
-            "missing": [],
-            "extras": []
-        }
+        return {"explanation": "Test mode: looks correct."}
 
     # Check for API key early and fail clearly
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(503, detail="OPENAI_API_KEY is not set on the server")
 
     try:
-        g = await grade_with_gpt5_explanation(
+        explanation = await grade_with_gpt5_explanation(
             question=inp.question_text,
             reference=inp.reference_text,
             transcript=inp.transcript
         )
+        return {"explanation": explanation}
     except Exception as e:
         log.error("LLM call failed: %s\n%s", e, traceback.format_exc())
         raise HTTPException(502, detail=f"LLM backend failed: {e}")
-
-    try:
-        return {
-            "correct": bool(g.get("correct", False)),
-            "explanation": g.get("explanation", ""),
-            "confidence": float(g.get("confidence", 0.0) or 0.0),
-            "missing": g.get("missing", []) or [],
-            "extras": g.get("extras", []) or [],
-        }
-    except Exception as e:
-        log.error("Response shaping failed: %s\n%s", e, traceback.format_exc())
-        raise HTTPException(500, detail="Server response formatting error")
 
 @app.post("/submit-grade")
 async def submit_manual_grade(inp: SubmitGradeIn):

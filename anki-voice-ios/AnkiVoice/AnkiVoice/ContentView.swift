@@ -201,11 +201,7 @@ extension ContentView {
 }
 
 struct GradeWithExplanationResponse: Decodable {
-    let correct: Bool
     let explanation: String
-    let confidence: Double
-    let missing: [String]
-    let extras: [String]
 }
 
 struct AskResponse: Decodable {
