@@ -1609,6 +1609,9 @@ struct ContentView: View {
         // Orchestrator handles TTS→STT transition with quiet fence
         await safeSpeakAndWait(front)
         
+        // Additional settle after TTS finishes to ensure echo has fully died down
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms additional settle
+        
         // 3) Move to awaitingAnswer and start answer phase
         state = .awaitingAnswer(cardId: cid, front: front, back: back)
         #if DEBUG
@@ -1623,7 +1626,14 @@ struct ContentView: View {
             hasPromptedForAnswer = true
             await tts.speakAndWait("What's your answer?", stt: stt)
             // Orchestrator already handled the TTS→STT transition with quiet fence
+            // Additional settle to ensure TTS audio has fully stopped
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms after prompt
         }
+        
+        // Clear transcript before starting to listen to avoid any TTS echo
+        stt.transcript = ""
+        stt.isFinal = false
+        
         await listenForAnswerContinuous()
     }
 

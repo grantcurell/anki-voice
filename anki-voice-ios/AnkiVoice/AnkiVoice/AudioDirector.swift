@@ -116,9 +116,16 @@ actor AudioDirector {
             return
         }
         phase = .stt
-        try? await Task.sleep(nanoseconds: 120_000_000)
+        
+        // Extended quiet fence to prevent TTS echo from being recorded
+        // Wait longer after TTS finishes to ensure audio has fully stopped and echo/reverb has died down
+        try? await Task.sleep(nanoseconds: 400_000_000) // 400ms quiet fence (increased from 120ms)
+        
         await MainActor.run {
             stt.micGate = .open
+            // Clear transcript before starting to avoid any stale text
+            stt.transcript = ""
+            stt.isFinal = false
         }
         do { try await stt.startRecognitionIfNeeded() } catch {
             #if DEBUG
@@ -126,7 +133,7 @@ actor AudioDirector {
             #endif
         }
         #if DEBUG
-        print("[AudioDirector] toSTT: gate open, recognition ensured")
+        print("[AudioDirector] toSTT: gate open, recognition ensured (after 400ms quiet fence)")
         #endif
     }
 
