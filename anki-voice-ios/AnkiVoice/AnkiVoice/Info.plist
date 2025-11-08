@@ -41,6 +41,10 @@
 	<string>This app uses speech recognition to capture your spoken answers to flashcards.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>This app needs microphone access to capture your spoken answers.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

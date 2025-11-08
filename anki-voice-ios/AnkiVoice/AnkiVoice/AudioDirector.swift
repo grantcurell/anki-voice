@@ -49,13 +49,23 @@ actor AudioDirector {
         guard !configured else { return }
         try await MainActor.run {
             let s = AVAudioSession.sharedInstance()
+            // Duplex audio with AEC, supports BT and speaker
             try s.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
                 options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
             )
             if #available(iOS 17.0, *) { try? s.setPrefersEchoCancelledInput(true) }
+            
+            // Speech engines are happy at 16 kHz; feel free to use 44.1kHz if your TTS prefers it
+            try s.setPreferredSampleRate(16_000)
+            
+            // 20 ms buffers are a good tradeoff for STT latency vs. power
+            try s.setPreferredIOBufferDuration(0.02)
+            
+            // Remain active across backgrounding
             try s.setActive(true)
+            
             // Force speaker unless on BT
             let outs = s.currentRoute.outputs
             let isBT = outs.contains { $0.portType == .bluetoothA2DP || $0.portType == .bluetoothLE || $0.portType == .bluetoothHFP }
@@ -63,6 +73,18 @@ actor AudioDirector {
             try? s.setPreferredInput(nil)
         }
         configured = true
+    }
+    
+    func ensureActive() async {
+        await MainActor.run {
+            try? AVAudioSession.sharedInstance().setActive(true, options: [])
+        }
+    }
+    
+    func deactivateIfReallyQuitting() async {
+        await MainActor.run {
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
     }
 
     func handle(_ e: Event) async {

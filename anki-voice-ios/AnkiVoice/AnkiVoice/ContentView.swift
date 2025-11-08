@@ -591,11 +591,32 @@ final class SpeechSTT: NSObject, ObservableObject {
                   let info = note.userInfo,
                   let typeVal = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: typeVal) else { return }
-            if type == .began {
-                Task { @MainActor in 
-                    // Stop recognition on interruption (director will reset phase on next transition)
+            
+            Task { @MainActor in
+                switch type {
+                case .began:
+                    // Pause TTS and stop STT on interruption
                     self.stopRecognitionIfRunning()
                     self.micGate = .closed
+                    // Keep session active - don't deactivate
+                    
+                case .ended:
+                    // Check if we should resume
+                    let shouldResume = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
+                        .map { AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume) } ?? false
+                    
+                    if shouldResume {
+                        // Reactivate session and restart if gate was open
+                        try? AVAudioSession.sharedInstance().setActive(true, options: [])
+                        if self.micGate == .open {
+                            // Restart recognition after brief delay
+                            try? await Task.sleep(nanoseconds: 200_000_000)
+                            try? await self.startRecognitionIfNeeded()
+                        }
+                    }
+                    
+                @unknown default:
+                    break
                 }
             }
         }
@@ -617,6 +638,26 @@ final class SpeechSTT: NSObject, ObservableObject {
                     try? await self.startRecognitionIfNeeded()
                     #endif
                 }
+            }
+        }
+        
+        // Handle media services reset (rare but critical - requires full reconfiguration)
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                #if os(iOS)
+                // Re-configure session and restart pipelines
+                try? await self.director?.configureOnce()
+                // Restart STT if gate was open
+                if self.micGate == .open {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    try? await self.startRecognitionIfNeeded()
+                }
+                #endif
             }
         }
         #endif
@@ -1085,12 +1126,34 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background {
+            switch newPhase {
+            case .active:
+                // Ensure session is active and STT is running if it should be
                 Task { @MainActor in
-                    stopAllIO(deactivateSession: true)  // Deactivate on app background
+                    await director.ensureActive()
+                    // Ensure STT is running if it should be (gate is open)
+                    if stt.micGate == .open && !stt.isRunning {
+                        try? await stt.startRecognitionIfNeeded()
+                    }
+                }
+                
+            case .inactive:
+                // Keep session active during transitions
+                break
+                
+            case .background:
+                // Do NOT deactivate session. Keep STT running (Discord-like behavior)
+                // Optional: pause TTS for battery savings
+                Task { @MainActor in
+                    tts.stopSpeaking()  // Pause TTS when backgrounded
+                    // Keep STT running - don't stop it
+                    // Keep session active - don't deactivate
                     currentNetworkTask?.cancel()
                     currentNetworkTask = nil
                 }
+                
+            @unknown default:
+                break
             }
             applyKeepAwake()
         }
@@ -1112,7 +1175,9 @@ struct ContentView: View {
                     routeWatchToken = nil
                 }
                 #endif
-                stopAllIO(deactivateSession: true)  // Deactivate on view disappear
+                // Only deactivate if really quitting (not just backgrounding)
+                // For true app termination, we'll deactivate
+                stopAllIO(deactivateSession: false)  // Don't deactivate - keep session alive
                 currentNetworkTask?.cancel()
                 currentNetworkTask = nil
             }
