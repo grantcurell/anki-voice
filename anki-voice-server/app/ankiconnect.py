@@ -1,4 +1,5 @@
 # app/ankiconnect.py
+import base64
 import httpx
 
 AC = "http://127.0.0.1:8765"
@@ -62,3 +63,40 @@ async def delete_note(note_id: int):
         return await ac_call("deleteNotes", {"notes": [note_id]})
     except Exception as e:
         return {"error": str(e)}
+
+async def get_card_info(card_id: int):
+    """Get card information including deck name"""
+    try:
+        result = await ac_call("cardsInfo", {"cards": [card_id]})
+        if isinstance(result, dict) and result.get("error") is None:
+            cards = result.get("result", [])
+            if cards and len(cards) > 0:
+                return cards[0]
+        return None
+    except Exception as e:
+        return None
+
+async def get_note_info(note_id: int):
+    """Get note information including tags"""
+    try:
+        result = await ac_call("notesInfo", {"notes": [note_id]})
+        if isinstance(result, dict) and result.get("error") is None:
+            notes = result.get("result", [])
+            if notes and len(notes) > 0:
+                return notes[0]
+        return None
+    except Exception as e:
+        return None
+
+async def retrieve_media_file(filename: str):
+    """Retrieve a media file from Anki's media folder"""
+    try:
+        result = await ac_call("retrieveMediaFile", {"filename": filename})
+        if isinstance(result, dict) and result.get("error") is None:
+            # result is base64-encoded data
+            data = result.get("result", "")
+            if data:
+                return base64.b64decode(data).decode("utf-8")
+        return None
+    except Exception as e:
+        return None

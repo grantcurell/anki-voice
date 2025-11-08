@@ -2,15 +2,17 @@
 import os
 import traceback
 import logging
+import json
+import re
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any, List
 import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, AC
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, get_card_info, get_note_info, retrieve_media_file, AC
 from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
@@ -23,6 +25,86 @@ ADDON_BASE = "http://127.0.0.1:8770"
 USE_GPT5 = os.getenv("USE_GPT5", "1") == "1"
 
 app = FastAPI(title="Anki Voice Server")
+
+# Cache for deck language configs (key: deck name, value: config dict)
+_deck_lang_cache: Dict[str, Dict[str, str]] = {}
+
+
+def sanitize_deck_name_for_filename(deck_name: str) -> str:
+    """Sanitize deck name for use in filename"""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", deck_name.strip())
+
+
+async def get_deck_language_config(deck_name: str) -> Optional[Dict[str, str]]:
+    """Get language configuration for a deck from media file"""
+    # Check cache first
+    if deck_name in _deck_lang_cache:
+        return _deck_lang_cache[deck_name]
+    
+    # Try to read from media file
+    sanitized = sanitize_deck_name_for_filename(deck_name)
+    filename = f"_ankiVoice.deck.{sanitized}.json"
+    
+    try:
+        content = await retrieve_media_file(filename)
+        if content:
+            config = json.loads(content)
+            # Cache it
+            _deck_lang_cache[deck_name] = config
+            return config
+    except Exception as e:
+        log.debug(f"Could not read deck config for {deck_name}: {e}")
+    
+    return None
+
+
+def extract_lang_from_tags(tags: List[str], prefix: str) -> Optional[str]:
+    """Extract language from tags like 'av:front=es-ES' or 'av:back=en-US'"""
+    for tag in tags:
+        if tag.startswith(f"{prefix}="):
+            return tag[len(prefix) + 1:]
+    return None
+
+
+async def get_language_hints(card_id: int) -> Dict[str, Optional[str]]:
+    """Get language hints for front and back of a card"""
+    front_lang = None
+    back_lang = None
+    
+    # Get card info to find deck name
+    card_info = await get_card_info(card_id)
+    if not card_info:
+        return {"front_language": None, "back_language": None}
+    
+    deck_name = card_info.get("deckName")
+    if not deck_name:
+        return {"front_language": None, "back_language": None}
+    
+    # Get note info to check for per-note tags
+    note_id = card_info.get("note")
+    note_tags = []
+    if note_id:
+        note_info = await get_note_info(note_id)
+        if note_info:
+            note_tags = note_info.get("tags", [])
+    
+    # Check for per-note tag overrides first (these take precedence)
+    front_lang = extract_lang_from_tags(note_tags, "av:front")
+    back_lang = extract_lang_from_tags(note_tags, "av:back")
+    
+    # If no per-note tags, check deck-level config
+    if not front_lang or not back_lang:
+        deck_config = await get_deck_language_config(deck_name)
+        if deck_config:
+            if not front_lang:
+                front_lang = deck_config.get("frontLang")
+            if not back_lang:
+                back_lang = deck_config.get("backLang")
+    
+    return {
+        "front_language": front_lang,
+        "back_language": back_lang
+    }
 
 # Add CORS middleware to allow iPhone app on LAN
 app.add_middleware(
@@ -104,6 +186,14 @@ async def current():
         
         data["front_text"] = html_to_text(data.get("front_html"))
         data["back_text"]  = html_to_text(data.get("back_html"))
+        
+        # Get language hints for TTS
+        card_id = data.get("cardId")
+        if card_id:
+            lang_hints = await get_language_hints(card_id)
+            data["front_language"] = lang_hints.get("front_language")
+            data["back_language"] = lang_hints.get("back_language")
+        
         return data
         
     except httpx.ConnectError:
