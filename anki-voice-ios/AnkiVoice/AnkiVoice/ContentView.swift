@@ -547,7 +547,8 @@ final class SpeechSTT: NSObject, ObservableObject {
 
     @Published var transcript: String = ""
     @Published var isFinal: Bool = false
-    private(set) var isRunning = false
+    @Published private(set) var isRunning = false
+    @Published private(set) var isMuted = false
 
     override init() {
         super.init()
@@ -568,15 +569,17 @@ final class SpeechSTT: NSObject, ObservableObject {
             Task { @MainActor in
                 // Restart recognition if device changed while listening (e.g., user inserts AirPods)
                 // Don't flip phase in callback; just keep recognition alive
-                if (reason == .newDeviceAvailable || reason == .oldDeviceUnavailable), self.micGate == .open {
+                if reason == .newDeviceAvailable || reason == .oldDeviceUnavailable {
                     #if DEBUG
-                    print("[RouteChange] Device change while STT active, restarting recognition…")
+                    print("[RouteChange] Device change, rebuilding tap…")
                     #endif
-                    // Just restart recognition (input will be re-asserted by director on next loop tick)
                     AVAudioSession.sharedInstance().preferBluetoothHFPInputIfAvailable()
-                    self.stopRecognitionIfRunning()
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    try? await self.startRecognitionIfNeeded()
+                    self.rebuildTapIfNeeded()
+                    if !self.isMuted, self.micGate == .open {
+                        self.stopRecognitionIfRunning()
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        try? await self.startRecognitionIfNeeded()
+                    }
                 }
             }
         }
@@ -606,9 +609,10 @@ final class SpeechSTT: NSObject, ObservableObject {
                         .map { AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume) } ?? false
                     
                     if shouldResume {
-                        // Reactivate session and restart if gate was open
+                        // Reactivate session and restart if gate was open and not muted
                         try? AVAudioSession.sharedInstance().setActive(true, options: [])
-                        if self.micGate == .open {
+                        self.rebuildTapIfNeeded()
+                        if !self.isMuted, self.micGate == .open {
                             // Restart recognition after brief delay
                             try? await Task.sleep(nanoseconds: 200_000_000)
                             try? await self.startRecognitionIfNeeded()
@@ -631,7 +635,7 @@ final class SpeechSTT: NSObject, ObservableObject {
         ) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
-                if self.micGate == .open {
+                if !self.isMuted, self.micGate == .open {
                     #if os(iOS)
                     await self.director?.handle(.assertSTTRunning(self))
                     #else
@@ -652,8 +656,9 @@ final class SpeechSTT: NSObject, ObservableObject {
                 #if os(iOS)
                 // Re-configure session and restart pipelines
                 try? await self.director?.configureOnce()
-                // Restart STT if gate was open
-                if self.micGate == .open {
+                self.rebuildTapIfNeeded()
+                // Restart STT if gate was open and not muted
+                if !self.isMuted, self.micGate == .open {
                     try? await Task.sleep(nanoseconds: 200_000_000)
                     try? await self.startRecognitionIfNeeded()
                 }
@@ -676,7 +681,79 @@ final class SpeechSTT: NSObject, ObservableObject {
     }
 
     
-    // Install tap once and keep engine running
+    // Public API for mute control
+    func setMuted(_ muted: Bool) {
+        if muted == isMuted { return }
+        isMuted = muted
+        
+        if muted {
+            // Hard stop recognition and remove the capture source
+            stopRecognitionIfRunning()
+            uninstallTapIfInstalled()
+            // Optional battery saver: stop the engine when fully muted
+            if engine.isRunning {
+                engine.stop()
+            }
+        } else {
+            // Prepare engine and reinstall tap (but only start recognition if allowed)
+            if !engine.isRunning {
+                engine.prepare()
+                try? engine.start()
+            }
+            installTapIfNeeded()
+            // Will no-op if micGate == .closed
+            Task { @MainActor in
+                try? await startRecognitionIfNeeded()
+            }
+        }
+    }
+    
+    // Tap management
+    private func installTapIfNeeded() {
+        guard !isMuted, !tapInstalled else { return }
+        
+        let input = engine.inputNode
+        var format = input.outputFormat(forBus: 0)
+        
+        // Fallback to inputFormat if output format is invalid
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            format = input.inputFormat(forBus: 0)
+        }
+        
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            #if DEBUG
+            print("[SpeechSTT] Cannot install tap: invalid format")
+            #endif
+            return
+        }
+        
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self, !self.isMuted, self.micGate == .open else { return }
+            self.request?.append(buffer)
+        }
+        
+        tapInstalled = true
+        #if DEBUG
+        print("[SpeechSTT] Tap installed")
+        #endif
+    }
+    
+    private func uninstallTapIfInstalled() {
+        guard tapInstalled else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        tapInstalled = false
+        #if DEBUG
+        print("[SpeechSTT] Tap uninstalled")
+        #endif
+    }
+    
+    // Call when routes/interruptions occur and you need to rebuild, but keep mute respected
+    func rebuildTapIfNeeded() {
+        uninstallTapIfInstalled()
+        installTapIfNeeded()
+    }
+    
+    // Install tap once and keep engine running (legacy method - now uses installTapIfNeeded)
     func installTapOnce() async throws {
         guard !tapInstalled else { return }
         
@@ -700,7 +777,7 @@ final class SpeechSTT: NSObject, ObservableObject {
         
         engine.prepare()
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            guard let self, self.micGate == .open else { return }
+            guard let self, !self.isMuted, self.micGate == .open else { return }
             self.request?.append(buffer)
         }
         
@@ -717,10 +794,31 @@ final class SpeechSTT: NSObject, ObservableObject {
         if task != nil && !isRunning {
             stopRecognitionIfRunning()
         }
-        guard task == nil else { return }
+        // Respect both the gate and mute override
+        guard !isMuted, task == nil, micGate == .open else { return }
         
         guard let recognizer = recognizer, recognizer.isAvailable else {
             throw NSError(domain: "stt", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speech recognizer is not available"])
+        }
+        
+        installTapIfNeeded()
+        
+        let input = engine.inputNode
+        var format = input.outputFormat(forBus: 0)
+        
+        // If format is invalid, try again after brief pause
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            format = input.outputFormat(forBus: 0)
+        }
+        
+        // Fallback to inputFormat
+        if format.sampleRate <= 0 || format.channelCount == 0 {
+            format = input.inputFormat(forBus: 0)
+        }
+        
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "stt", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid audio format"])
         }
         
         transcript = ""
@@ -736,28 +834,53 @@ final class SpeechSTT: NSObject, ObservableObject {
         }
         request = req
         
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
+        
+        isRunning = true
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
+            
             if let error = error {
                 #if DEBUG
                 print("STT error: \(error)")
                 #endif
                 Task { @MainActor in
-                    self.stopRecognitionIfRunning()
+                    self.isRunning = false
+                    self.task = nil
+                    self.request = nil
+                    // If still allowed to listen, auto-recover
+                    if !self.isMuted, self.micGate == .open {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        try? await self.startRecognitionIfNeeded()
+                    }
                 }
                 return
             }
-            if let result = result {
+            
+            if let r = result {
                 Task { @MainActor in
-                    self.transcript = result.bestTranscription.formattedString
-                    if result.isFinal {
-                        self.isFinal = true
+                    self.transcript = r.bestTranscription.formattedString
+                    self.isFinal = r.isFinal
+                }
+            }
+            
+            if result?.isFinal == true {
+                Task { @MainActor in
+                    self.isRunning = false
+                    self.task = nil
+                    self.request = nil
+                    // If still allowed to listen, auto-recover
+                    if !self.isMuted, self.micGate == .open {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        try? await self.startRecognitionIfNeeded()
                     }
                 }
             }
         }
         
-        isRunning = true
         #if DEBUG
         print("[SpeechSTT] Recognition task started")
         #endif
@@ -771,6 +894,7 @@ final class SpeechSTT: NSObject, ObservableObject {
         request = nil
         isFinal = false
         isRunning = false
+        // Do not auto-remove tap here; mute controls source removal
         #if DEBUG
         print("[SpeechSTT] Recognition task stopped")
         #endif
@@ -854,12 +978,21 @@ struct ContentView: View {
                         #if os(iOS)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         #endif
-                        tts.stopSpeaking()
+                        stt.setMuted(!stt.isMuted)
                     }) {
-                        Image(systemName: "speaker.slash.fill")
+                        Image(systemName: stt.isMuted ? "mic.slash.fill" : "mic.fill")
                             .font(.title2)
-                            .foregroundColor(.red)
+                            .foregroundColor(stt.isMuted ? .red : .primary)
                             .padding(8)
+                            .overlay(
+                                Group {
+                                    if stt.isMuted {
+                                        Circle().stroke(Color.red, lineWidth: 1.5)
+                                    }
+                                }
+                            )
+                            .accessibilityLabel(stt.isMuted ? "Microphone muted" : "Microphone on")
+                            .accessibilityHint("Double tap to toggle microphone")
                     }
                 }
                 .padding(.horizontal)

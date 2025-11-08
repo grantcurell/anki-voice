@@ -113,6 +113,7 @@ actor AudioDirector {
         await MainActor.run {
             stt.micGate = .closed
             stt.stopRecognitionIfRunning()
+            // Leave stt.setMuted(_:) alone here — user control overrides phase
             let s = AVAudioSession.sharedInstance()
             let outs = s.currentRoute.outputs
             let isBT = outs.contains { $0.portType == .bluetoothA2DP || $0.portType == .bluetoothLE || $0.portType == .bluetoothHFP }
@@ -149,6 +150,7 @@ actor AudioDirector {
             stt.transcript = ""
             stt.isFinal = false
         }
+        // If user muted, startRecognitionIfNeeded() will no-op; otherwise it starts
         do { try await stt.startRecognitionIfNeeded() } catch {
             #if DEBUG
             print("[AudioDirector] toSTT: failed to start recognition: \(error)")
