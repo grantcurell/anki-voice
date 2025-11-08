@@ -943,6 +943,7 @@ struct ContentView: View {
     @State private var showBackDuringProcessing = false  // show back while LLM is grading
     @State private var lastErrorSpokenAt: Date?  // rate-limit error TTS
     @State private var serverHealthStatus: String?  // "Connected" or "Server unreachable"
+    @State private var lastGradedCardId: Int?  // Track last graded card for undo
     
     #if os(iOS)
     private let director = AudioDirector()
@@ -2073,8 +2074,18 @@ struct ContentView: View {
                 await listenForAction()
                 return
             }
+            
+            // 7) Undo phrases (undo last grade and go back to previous card)
+            let undoPhrases = ["undo", "change", "take back", "undo that", "change that"]
+            if undoPhrases.contains(where: { lower.contains($0) }) {
+                stt.stop()
+                isListening = false
+                await undoLastGrade()
+                // undoLastGrade will call startReview() to go back to previous card
+                return
+            }
 
-            // 4) Normal path: grade with explanation
+            // 8) Normal path: grade with explanation
             stt.stop()
             isListening = false
             await MainActor.run { showBackDuringProcessing = true }  // show the back while LLM is working
@@ -3052,6 +3063,8 @@ struct ContentView: View {
                         if let result = submitResponse.result {
                             if result {
                                 appLog("Grade submitted successfully", category: "network")
+                                // Track this card as the last graded card for undo
+                                lastGradedCardId = cardId
                                 return true
                             } else {
                                 let errorMsg = submitResponse.error ?? "unknown"
@@ -3121,7 +3134,6 @@ struct ContentView: View {
             return
         }
         
-        // Short timeout for undo command
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 2.0
         config.timeoutIntervalForResource = 3.0
@@ -3131,18 +3143,46 @@ struct ContentView: View {
         req.httpMethod = "POST"
         
         do {
-            _ = try await session.data(for: req)
-            // Await speech before starting next review to avoid overlap
-            #if os(iOS)
-            await director.handle(.toTTS(stt))
-            #endif
-            await tts.speakAndWait("Undid that.", stt: stt)
-            // Try to fetch current card again
-            #if os(iOS)
-            await director.handle(.toTTS(stt))
-            #endif
-            await startReview()
+            let (data, response) = try await session.data(for: req)
+            
+            if let httpResponse = response as? HTTPURLResponse,
+               httpResponse.statusCode == 200 {
+                // Check if AnkiConnect returned an error
+                struct UndoResponse: Decodable {
+                    let result: Bool?
+                    let error: String?
+                }
+                let decoder = JSONDecoder()
+                if let undoResponse = decoder.decodeIfPresent(UndoResponse.self, from: data) {
+                    if let error = undoResponse.error {
+                        #if DEBUG
+                        print("[UNDO] AnkiConnect error: \(error)")
+                        #endif
+                        tts.speak("Could not undo. \(error)")
+                        return
+                    }
+                }
+                
+                // Undo succeeded - just fetch the current card and continue
+                #if os(iOS)
+                await director.handle(.toTTS(stt))
+                #endif
+                await tts.speakAndWait("Undid that.", stt: stt)
+                
+                // Fetch whatever card Anki is showing now and start review
+                await startReview()
+                // Clear the last graded card ID since we've undone it
+                lastGradedCardId = nil
+            } else {
+                #if DEBUG
+                print("[UNDO] HTTP error: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                #endif
+                tts.speak("Could not undo.")
+            }
         } catch {
+            #if DEBUG
+            print("[UNDO] Network error: \(error)")
+            #endif
             tts.speak("Could not undo.")
         }
     }
