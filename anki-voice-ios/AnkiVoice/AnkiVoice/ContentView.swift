@@ -272,13 +272,14 @@ fileprivate struct AnyDecodable: Decodable {
     }
 }
 
-enum ReviewState {
+enum ReviewState: Equatable {
     case idle
     case readingFront(cardId: Int, front: String, back: String)
     case awaitingAnswer(cardId: Int, front: String, back: String)
     case explaining(cardId: Int, front: String, back: String, explanation: String)
     case awaitingAction(cardId: Int, front: String, back: String) // listen for grade or question
     case confirmingGrade(cardId: Int, ease: Int, front: String, back: String) // ask "Confirm Good?"
+    case confirmingDelete(cardId: Int, front: String, back: String) // ask "Confirm delete note?"
 }
 
 // Names Apple uses for novelty/gag voices (differs across OSes)
@@ -1091,8 +1092,18 @@ struct ContentView: View {
                     currentNetworkTask = nil
                 }
             }
+            applyKeepAwake()
+        }
+        .onChange(of: state) { _, _ in
+            applyKeepAwake()
+        }
+        .onAppear {
+            applyKeepAwake()
         }
         .onDisappear {
+            #if os(iOS)
+            UIApplication.shared.isIdleTimerDisabled = false
+            #endif
             Task { @MainActor in
                 #if os(iOS)
                 // Remove route observer
@@ -1277,14 +1288,23 @@ struct ContentView: View {
         case .explaining: return "Explaining"
         case .awaitingAction: return "Awaiting Action"
         case .confirmingGrade: return "Confirming Grade"
+        case .confirmingDelete: return "Confirming Delete"
         }
+    }
+    
+    private func applyKeepAwake() {
+        #if os(iOS)
+        let reviewActive = (state != .idle)
+        let appActive = (scenePhase == .active)
+        UIApplication.shared.isIdleTimerDisabled = (reviewActive && appActive)
+        #endif
     }
     
     private var displayTitle: String {
         switch state {
         case .readingFront, .awaitingAnswer: return showBackDuringProcessing ? "Answer" : "Question"
         case .explaining, .awaitingAction:   return "Answer"
-        case .confirmingGrade:               return "Confirm"
+        case .confirmingGrade, .confirmingDelete: return "Confirm"
         case .idle:                          return ""
         }
     }
@@ -1296,6 +1316,7 @@ struct ContentView: View {
         case .explaining(_, _, let back, _):                      return back
         case .awaitingAction(_, _, let back):                     return back
         case .confirmingGrade(_, _, _, let back):         return back
+        case .confirmingDelete(_, _, let back):             return back
         case .idle:                                               return ""
         }
     }
@@ -1760,7 +1781,29 @@ struct ContentView: View {
 
             let lower = transcript.lowercased()
             
-            // 1) Read Answer phrases (skip LLM, read back)
+            // 1) Reread Question phrases (stay in answer phase, just reread the question)
+            let rereadQuestionPhrases = [
+                "reread question", "reread the question", "say the question again", "read question again", "repeat question", "repeat the question"
+            ]
+            if rereadQuestionPhrases.contains(where: { lower.contains($0) }) {
+                stt.stop()
+                isListening = false
+                await handleRereadQuestion()
+                return
+            }
+            
+            // 2) Reread Answer phrases (stay in answer phase, just reread)
+            let rereadAnswerPhrases = [
+                "reread answer", "reread the answer", "say the answer again", "read answer again"
+            ]
+            if rereadAnswerPhrases.contains(where: { lower.contains($0) }) {
+                stt.stop()
+                isListening = false
+                await handleRereadAnswer()
+                return
+            }
+            
+            // 3) Read Answer phrases (skip LLM, read back and go to action phase)
             let readAnswerPhrases = [
                 "read answer", "read the answer", "show answer", "tell me the answer"
             ]
@@ -1771,7 +1814,7 @@ struct ContentView: View {
                 return
             }
             
-            // 2) Immediate grade phrases (skip LLM, submit grade)
+            // 4) Immediate grade phrases (skip LLM, submit grade)
             switch IntentParser.parse(lower) {
             case .grade(let ease, let canonical, let unambiguous) where unambiguous:
                 // We are in .awaitingAnswer; grade and advance immediately
@@ -1805,7 +1848,22 @@ struct ContentView: View {
                 break
             }
             
-            // 3) "I don't know" flow (skip LLM, read back)
+            // 5) Delete note phrases (confirm before deleting)
+            let deleteNotePhrases = [
+                "delete note", "delete the note", "remove note", "remove the note", "delete this note", "delete card", "delete the card"
+            ]
+            if deleteNotePhrases.contains(where: { lower.contains($0) }) {
+                stt.stop()
+                isListening = false
+                guard case .awaitingAnswer(let cid2, let front2, let back2) = state else { return }
+                state = .confirmingDelete(cardId: cid2, front: front2, back: back2)
+                await tts.speakAndWait("Delete this note? Say confirm to delete, or say cancel.")
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                await listenForDeleteConfirmation()
+                return
+            }
+            
+            // 6) "I don't know" flow (skip LLM, read back)
             let skipLLMPhrases = ["i don't know", "i have no idea", "i'm not sure", "no idea", "don't know", "i dunno"]
             if skipLLMPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
@@ -1950,6 +2008,14 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 await listenForAction()
             }
+            
+        case .confirmingDelete(let cid, let front, let back):
+            // Cancel deletion confirmation; return to answer phase
+            stopForTransition(true)
+            state = .awaitingAnswer(cardId: cid, front: front, back: back)
+            await tts.speakAndWait("Cancelled.")
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await listenForAnswerContinuous()
         }
     }
     
@@ -2003,7 +2069,75 @@ struct ContentView: View {
             await safeSpeakAndWait(back)
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
+            
+        case .confirmingDelete(let cid, let front, let back):
+            // Cancel deletion confirmation; return to answer phase
+            stopForTransition(true)
+            state = .awaitingAnswer(cardId: cid, front: front, back: back)
+            await safeSpeakAndWait("Cancelled.")
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await listenForAnswerContinuous()
         }
+    }
+    
+    @MainActor
+    func handleRereadQuestion() async {
+        // Reread the question but stay in answer phase (don't transition to action phase)
+        guard case .awaitingAnswer(_, let front, _) = state else {
+            return
+        }
+        
+        // Stop STT temporarily while speaking
+        stt.stop()
+        
+        // Keep showing the question in UI (don't show back during processing)
+        showBackDuringProcessing = false
+        
+        // Read the question using TTS
+        #if os(iOS)
+        await director.handle(.toTTS(stt))
+        #endif
+        await tts.speakAndWait(front)
+        
+        // Wait a bit for TTS to settle
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms settle after TTS
+        
+        // Clear transcript before resuming listening
+        stt.transcript = ""
+        stt.isFinal = false
+        
+        // Resume listening for answer (stay in awaitingAnswer state)
+        await listenForAnswerContinuous()
+    }
+    
+    @MainActor
+    func handleRereadAnswer() async {
+        // Reread the answer but stay in answer phase (don't transition to action phase)
+        guard case .awaitingAnswer(_, _, let back) = state else {
+            return
+        }
+        
+        // Stop STT temporarily while speaking
+        stt.stop()
+        
+        // Show the back in UI (so user can see it while it's being read)
+        showBackDuringProcessing = true
+        
+        // Read the answer using TTS
+        #if os(iOS)
+        await director.handle(.toTTS(stt))
+        #endif
+        await tts.speakAndWait(back)
+        
+        // Wait a bit for TTS to settle
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms settle after TTS
+        
+        // Clear transcript before resuming listening
+        stt.transcript = ""
+        stt.isFinal = false
+        
+        // Resume listening for answer (stay in awaitingAnswer state)
+        await listenForAnswerContinuous()
     }
     
     func getExplanation(transcript: String) async {
@@ -2456,6 +2590,140 @@ struct ContentView: View {
             await tts.speakAndWait("Okay. Say a grade or ask a question.")
             try? await Task.sleep(nanoseconds: 150_000_000)
             await listenForAction()
+        }
+    }
+    
+    func listenForDeleteConfirmation() async {
+        stt.stopRecognitionIfRunning()
+        // Don't deactivate session - keep it active for smooth transition
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        isListening = true
+        #if os(iOS)
+        // Enter STT phase
+        await director.handle(.toSTT(stt))
+        #else
+        try? await stt.startRecognitionIfNeeded()
+        #endif
+
+        let started = DispatchTime.now()
+        var last = ""
+        var unchangedCount = 0
+        let unchangedThreshold = 2
+        let hardTimeout: UInt64 = 3_000_000_000
+
+        while true {
+            // Check for cancellation
+            if Task.isCancelled {
+                stt.stopRecognitionIfRunning()
+                isListening = false
+                return
+            }
+            
+            // Resilience check: if recognizer silently died, restart it
+            if !stt.isRunning {
+                #if os(iOS)
+                // Assert liveness without re-entering STT
+                await director.handle(.assertSTTRunning(stt))
+                #else
+                try? await stt.startRecognitionIfNeeded()
+                #endif
+            }
+            
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+            if elapsed >= hardTimeout { break }
+
+            let text = stt.transcript
+            if stt.isFinal && !text.isEmpty { break }
+            if text == last { unchangedCount += 1 } else { unchangedCount = 0; last = text }
+            if !text.isEmpty && unchangedCount >= unchangedThreshold { break }
+        }
+
+        stt.stop()
+        isListening = false
+        // Don't deactivate session here - keep it active for smooth transitions
+
+        let utter = stt.transcript.lowercased()
+        let confirmed = utter.contains("confirm") || utter.contains("yes") || utter.contains("do it") ||
+                        utter.contains("that's fine") || utter.contains("okay") || utter.contains("ok")
+        let cancelled = utter.contains("no") || utter.contains("cancel") || utter.contains("wait") ||
+                        utter.contains("hold on") || utter.contains("change")
+
+        if cancelled {
+            guard case .confirmingDelete(let cid, let front, let back) = state else { return }
+            state = .awaitingAnswer(cardId: cid, front: front, back: back)
+            await tts.speakAndWait("Okay. Cancelled.")
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await listenForAnswerContinuous()
+            return
+        }
+
+        await handleDeleteConfirmation(confirmed: confirmed) // safer: don't auto-confirm on timeout
+    }
+    
+    func handleDeleteConfirmation(confirmed: Bool) async {
+        guard case .confirmingDelete(let cid, let front, let back) = state else { return }
+        
+        // STT is already stopped by listenForDeleteConfirmation()
+        
+        if confirmed {
+            let success = await deleteNote(cardId: cid)
+            if success {
+                #if os(iOS)
+                await director.handle(.toTTS(stt))
+                #endif
+                await tts.speakAndWait("Note deleted.")
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                await startReview() // Fetch next card
+            } else {
+                tts.speak("Failed to delete note. Make sure Anki Desktop is running.")
+                state = .awaitingAnswer(cardId: cid, front: front, back: back)
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                await listenForAnswerContinuous()
+            }
+        } else {
+            state = .awaitingAnswer(cardId: cid, front: front, back: back)
+            await tts.speakAndWait("Okay. Cancelled.")
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await listenForAnswerContinuous()
+        }
+    }
+    
+    func deleteNote(cardId: Int) async -> Bool {
+        guard let base = validatedBaseURL(),
+              let url = URL(string: "\(base)/delete-note") else {
+            return false
+        }
+        
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = ["cardId": cardId]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 10.0
+        cfg.timeoutIntervalForResource = 12.0
+        let session = URLSession(configuration: cfg)
+        
+        do {
+            let (data, response) = try await session.data(for: req)
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            
+            if httpResponse.statusCode == 200 {
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   json["error"] == nil || (json["error"] as? NSNull) != nil {
+                    return true
+                }
+            }
+            return false
+        } catch {
+            #if DEBUG
+            print("[DeleteNote] Error: \(error)")
+            #endif
+            return false
         }
     }
 

@@ -10,8 +10,8 @@ import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, AC
-from .openai_client import grade_with_gpt5, grade_with_gpt5_explanation, answer_followup
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, AC
+from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
 load_dotenv()
@@ -85,6 +85,9 @@ class AskIn(BaseModel):
     question_text: Optional[str] = None
     reference_text: Optional[str] = None
 
+class DeleteNoteIn(BaseModel):
+    cardId: int
+
 @app.get("/current")
 async def current():
     try:
@@ -142,19 +145,6 @@ async def api_grade(inp: GradeIn):
     })
     suggested = ease_from_verdict(verdict)
     reasons = {"rule_hits": list(hits), "rule_missing": list(missing)}
-
-    # 2) If unclear or wrong, and we have question/reference, escalate to GPT-5
-    if USE_GPT5 and verdict != "correct" and inp.question_text and inp.reference_text:
-        g = await grade_with_gpt5(
-            question=inp.question_text, 
-            reference=inp.reference_text, 
-            transcript=inp.transcript
-        )
-        # combine signals
-        if g.get("correct") and g.get("confidence",0)>=0.65:
-            verdict = "correct"
-            suggested = ease_from_verdict("correct", g.get("confidence",1.0))
-        reasons["llm"] = g
 
     return {"verdict": verdict, "suggested_ease": suggested, "reasons": reasons}
 
@@ -217,6 +207,27 @@ async def ask_about_card(inp: AskIn):
         user_question=inp.question
     )
     return {"answer": text}
+
+@app.post("/delete-note")
+async def delete_current_note(inp: DeleteNoteIn):
+    """Delete the note for the given card ID"""
+    try:
+        # Get note ID from card ID
+        note_id = await get_note_id(inp.cardId)
+        if note_id is None:
+            raise HTTPException(404, detail="Could not find note for this card")
+        
+        # Delete the note
+        result = await delete_note(note_id)
+        if isinstance(result, dict) and result.get("error"):
+            raise HTTPException(502, detail=f"AnkiConnect error: {result['error']}")
+        
+        return {"result": result.get("result"), "error": result.get("error")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Delete note failed: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(500, detail=f"Failed to delete note: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

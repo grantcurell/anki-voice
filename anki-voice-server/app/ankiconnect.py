@@ -43,3 +43,22 @@ async def undo_review():
         return await ac_call("guiUndoReview")
     except Exception as e:
         return {"error": str(e)}
+
+async def get_note_id(card_id: int):
+    """Get the note ID for a given card ID"""
+    try:
+        result = await ac_call("cardsInfo", {"cards": [card_id]})
+        if isinstance(result, dict) and result.get("error") is None:
+            cards = result.get("result", [])
+            if cards and len(cards) > 0:
+                return cards[0].get("note")
+        return None
+    except Exception as e:
+        return None
+
+async def delete_note(note_id: int):
+    """Delete a note by note ID"""
+    try:
+        return await ac_call("deleteNotes", {"notes": [note_id]})
+    except Exception as e:
+        return {"error": str(e)}
