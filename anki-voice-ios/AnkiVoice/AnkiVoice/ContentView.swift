@@ -1090,9 +1090,12 @@ struct ContentView: View {
                     }
                 }
                 
-                Button("Authorize Speech & Mic") {
-                    authorizeSpeechAndMic()
-                }.disabled(canStart)
+                // Only show authorize button if permissions are not already granted
+                if !canStart {
+                    Button("Authorize Speech & Mic") {
+                        authorizeSpeechAndMic()
+                    }
+                }
 
                 if let msg = permissionErrorMessage {
                     Text(msg)
@@ -1124,34 +1127,42 @@ struct ContentView: View {
                         .font(.caption)
                 }
                 
-                Button("Start Review") {
-                    #if DEBUG
-                    print("[START] Button tapped. canStart=\(canStart), isBusy=\(isBusy), micAuth=\(micAuthorized), speechAuth=\(speechAuthorized)")
-                    #endif
-                    guard !isBusy else {
+                // Show "Start Review" when idle, "Return to deck selection" when in review
+                Button(state == .idle ? "Start Review" : "Return to deck selection") {
+                    if state == .idle {
                         #if DEBUG
-                        print("[START] Already busy, ignoring tap")
+                        print("[START] Button tapped. canStart=\(canStart), isBusy=\(isBusy), micAuth=\(micAuthorized), speechAuth=\(speechAuthorized)")
                         #endif
-                        return
-                    }
-                    guard canStart else {
-                        #if DEBUG
-                        print("[START] Cannot start: permissions not granted")
-                        #endif
-                        return
-                    }
-                    // startReview() handles isBusy guard/defer internally
-                    Task {
-                        #if DEBUG
-                        print("[START] Starting review task...")
-                        #endif
-                        await startReview()
-                        #if DEBUG
-                        print("[START] Review task completed, state=\(state)")
-                        #endif
+                        guard !isBusy else {
+                            #if DEBUG
+                            print("[START] Already busy, ignoring tap")
+                            #endif
+                            return
+                        }
+                        guard canStart else {
+                            #if DEBUG
+                            print("[START] Cannot start: permissions not granted")
+                            #endif
+                            return
+                        }
+                        // startReview() handles isBusy guard/defer internally
+                        Task {
+                            #if DEBUG
+                            print("[START] Starting review task...")
+                            #endif
+                            await startReview()
+                            #if DEBUG
+                            print("[START] Review task completed, state=\(state)")
+                            #endif
+                        }
+                    } else {
+                        // Return to deck selection
+                        Task {
+                            await returnToDeckSelection()
+                        }
                     }
                 }
-                .disabled(!canStart || isBusy)
+                .disabled(state == .idle && (!canStart || isBusy))
 
                 // Card displaying current prompt/answer
                 if !displayText.isEmpty {
@@ -1240,6 +1251,9 @@ struct ContentView: View {
             }.padding()
         }
         .onAppear {
+            // Check authorization status on app startup
+            checkAuthorizationStatus()
+            
             // Fetch decks when app appears
             Task {
                 await fetchDecks()
@@ -1736,7 +1750,50 @@ struct ContentView: View {
             permissionErrorMessage = "Speech Recognition was previously denied. Enable it in Settings."
         }
     }
+    
+    /// Check current authorization status without requesting permissions
+    /// This is called on app startup to check if permissions are already granted
+    private func checkAuthorizationStatus() {
+        // Check microphone permission
+        switch MicPermission.state() {
+        case .granted:
+            micAuthorized = true
+            // If mic is granted, check speech recognition
+            switch SpeechPermission.state() {
+            case .granted:
+                speechAuthorized = true
+            case .undetermined, .denied:
+                speechAuthorized = false
+            }
+        case .undetermined, .denied:
+            micAuthorized = false
+            speechAuthorized = false
+        }
+    }
 
+    @MainActor
+    func returnToDeckSelection() async {
+        // Stop all audio I/O
+        stopAllIO(deactivateSession: true)
+        
+        // Cancel any ongoing network tasks
+        currentNetworkTask?.cancel()
+        currentNetworkTask = nil
+        listeningTask?.cancel()
+        listeningTask = nil
+        
+        // Reset state to idle
+        state = .idle
+        current = nil
+        showBackDuringProcessing = false
+        hasPromptedForAnswer = false
+        isListening = false
+        
+        #if DEBUG
+        print("[RETURN] Returned to deck selection")
+        #endif
+    }
+    
     func startReview() async {
         // Prevent concurrent runs (covers voice-initiated paths too)
         if isBusy { 
