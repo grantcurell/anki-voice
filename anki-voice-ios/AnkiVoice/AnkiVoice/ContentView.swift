@@ -955,6 +955,9 @@ struct ContentView: View {
     @State private var lastErrorSpokenAt: Date?  // rate-limit error TTS
     @State private var serverHealthStatus: String?  // "Connected" or "Server unreachable"
     @State private var lastGradedCardId: Int?  // Track last graded card for undo
+    @State private var availableDecks: [String] = []  // List of available decks
+    @State private var selectedDeck: String = ""  // Currently selected deck
+    @State private var isLoadingDecks: Bool = false  // Loading state for decks
     
     #if os(iOS)
     private let director = AudioDirector()
@@ -1030,6 +1033,40 @@ struct ContentView: View {
                             .font(.caption2)
                             .foregroundColor(.orange)
                         #endif
+                    }
+                    
+                    // Deck selection dropdown
+                    if !availableDecks.isEmpty {
+                        Picker("Select Deck", selection: $selectedDeck) {
+                            Text("Select a deck...").tag("")
+                            ForEach(availableDecks, id: \.self) { deck in
+                                Text(deck).tag(deck)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .onChange(of: selectedDeck) { oldValue, newValue in
+                            if !newValue.isEmpty && newValue != oldValue {
+                                Task {
+                                    await switchDeck(to: newValue)
+                                }
+                            }
+                        }
+                    } else if isLoadingDecks {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Loading decks...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        Button("Load Decks") {
+                            Task {
+                                await fetchDecks()
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
                     }
                 }
                 
@@ -1203,6 +1240,11 @@ struct ContentView: View {
             }.padding()
         }
         .onAppear {
+            // Fetch decks when app appears
+            Task {
+                await fetchDecks()
+            }
+            
             // One-time migration: update old IPs to Tailscale MagicDNS hostname
             let oldIPs = [
                 "http://192.168.1.153:8000",
@@ -1481,6 +1523,84 @@ struct ContentView: View {
     private func safeSpeakAndWait(_ text: String, language: String? = nil) async {
         guard scenePhase == .active else { return }
         await tts.speakAndWait(text, stt: stt, language: language)  // speakAndWait routes once; speak(route:false)
+    }
+    
+    @MainActor
+    func switchDeck(to deck: String) async {
+        guard let base = validatedBaseURL(),
+              let encodedDeck = deck.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(base)/switch-deck?name=\(encodedDeck)") else {
+            await tts.speakAndWait("Invalid server URL.")
+            return
+        }
+        
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                await tts.speakAndWait("Couldn't switch decks.")
+                return
+            }
+            
+            // After switching, fetch the now-current card and proceed as normal
+            if let c = await fetchCurrentCard(),
+               c.status == "ok",
+               let cid = c.cardId, let front = c.front_text, let back = c.back_text {
+                current = c
+                #if os(iOS)
+                await director.handle(.toTTS(stt))
+                #endif
+                state = .readingFront(cardId: cid, front: front, back: back)
+                let frontTTS = c.front_text_tts ?? front
+                let frontLang = c.front_language
+                await safeSpeakAndWait(frontTTS, language: frontLang)
+                state = .awaitingAnswer(cardId: cid, front: front, back: back)
+                await startAnswerPhase(cardId: cid, front: front, back: back)
+            } else {
+                // Deck may have 0 due cards ("Congratulations")
+                await tts.speakAndWait("No cards due in \(deck).")
+            }
+        } catch {
+            await tts.speakAndWait("Cannot reach Anki.")
+        }
+    }
+    
+    @MainActor
+    func fetchDecks() async {
+        guard let base = validatedBaseURL(),
+              let url = URL(string: "\(base)/decks") else {
+            return
+        }
+        
+        isLoadingDecks = true
+        defer { isLoadingDecks = false }
+        
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                return
+            }
+            
+            struct DecksResponse: Decodable {
+                let status: String
+                let decks: [String]
+            }
+            
+            let decoded = try JSONDecoder().decode(DecksResponse.self, from: data)
+            if decoded.status == "ok" {
+                await MainActor.run {
+                    availableDecks = decoded.decks.sorted()
+                    // If no deck is selected and we have decks, optionally select the first one
+                    if selectedDeck.isEmpty && !availableDecks.isEmpty {
+                        // Don't auto-select, let user choose
+                    }
+                }
+            }
+        } catch {
+            // Silently fail - user can retry
+        }
     }
     
     @MainActor

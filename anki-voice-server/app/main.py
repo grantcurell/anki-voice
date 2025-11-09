@@ -13,7 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review
 from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
@@ -314,6 +314,35 @@ async def ask_about_card(inp: AskIn):
         user_question=inp.question
     )
     return {"answer": text}
+
+@app.get("/decks")
+async def get_decks():
+    """Get list of all available decks"""
+    try:
+        decks = await get_deck_names()
+        return {"status": "ok", "decks": decks}
+    except Exception as e:
+        log.error("Failed to get decks: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=502, detail=f"Failed to get decks: {str(e)}")
+
+@app.post("/switch-deck")
+async def switch_deck_endpoint(name: str):
+    """Switch to a different deck in Anki's reviewer"""
+    try:
+        # 1) Validate that the deck exists
+        decks = await get_deck_names()
+        if name not in decks:
+            raise HTTPException(status_code=404, detail=f"Deck not found: {name}")
+        
+        # 2) Open the reviewer for that deck
+        await gui_deck_review(name)
+        
+        return {"status": "ok", "deck": name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Failed to switch deck: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=502, detail=f"Failed to switch deck: {str(e)}")
 
 @app.post("/delete-note")
 async def delete_current_note(inp: DeleteNoteIn):

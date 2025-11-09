@@ -116,3 +116,27 @@ async def retrieve_media_file(filename: str):
         return None
     except Exception as e:
         return None
+
+async def get_deck_names():
+    """Get list of all deck names"""
+    try:
+        result = await ac_call("deckNames")
+        if isinstance(result, dict):
+            if result.get("error"):
+                raise Exception(result["error"])
+            return result.get("result", [])
+        return []
+    except Exception as e:
+        raise Exception(f"Failed to get deck names: {str(e)}")
+
+async def gui_deck_review(deck_name: str):
+    """Open the reviewer for a specific deck"""
+    try:
+        result = await ac_call("guiDeckReview", {"name": deck_name})
+        if isinstance(result, dict):
+            if result.get("error"):
+                raise Exception(result["error"])
+            return result.get("result")
+        return None
+    except Exception as e:
+        raise Exception(f"Failed to open deck reviewer: {str(e)}")
