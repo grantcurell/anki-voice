@@ -1,6 +1,7 @@
 # app/ankiconnect.py
 import base64
 import httpx
+from typing import List
 
 AC = "http://127.0.0.1:8765"
 
@@ -45,6 +46,14 @@ async def undo_review():
     except Exception as e:
         return {"error": str(e)}
 
+async def close_reviewer():
+    """Close the reviewer window to prevent crashes when deleting notes"""
+    try:
+        # guiDeckOverview closes the reviewer and shows deck overview
+        return await ac_call("guiDeckOverview")
+    except Exception as e:
+        return {"error": str(e)}
+
 async def get_note_id(card_id: int):
     """Get the note ID for a given card ID"""
     try:
@@ -61,6 +70,13 @@ async def delete_note(note_id: int):
     """Delete a note by note ID"""
     try:
         return await ac_call("deleteNotes", {"notes": [note_id]})
+    except Exception as e:
+        return {"error": str(e)}
+
+async def suspend_cards(card_ids: List[int]):
+    """Suspend cards (they won't appear in reviews but aren't deleted)"""
+    try:
+        return await ac_call("suspend", {"cards": card_ids})
     except Exception as e:
         return {"error": str(e)}
 

@@ -146,6 +146,10 @@ struct CurrentCard: Decodable {
     let cardId: Int?
     let front_text: String?
     let back_text: String?
+    let front_text_tts: String?  // README div only for TTS, falls back to front_text if not present
+    let back_text_tts: String?    // README div only for TTS, falls back to back_text if not present
+    let front_language: String?   // BCP-47 language code for front TTS (e.g., "es-ES", "en-US")
+    let back_language: String?    // BCP-47 language code for back TTS (e.g., "es-ES", "en-US")
 }
 
 // MARK: - Post-grade resync helpers
@@ -186,7 +190,9 @@ extension ContentView {
                     await director.handle(.toTTS(stt))
                     #endif
                     state = .readingFront(cardId: cid, front: front, back: back)
-                    await safeSpeakAndWait(front)
+                    let frontTTS = c.front_text_tts ?? front
+                    let frontLang = c.front_language
+                    await safeSpeakAndWait(frontTTS, language: frontLang)
                     state = .awaitingAnswer(cardId: cid, front: front, back: back)
                     await startAnswerPhase(cardId: cid, front: front, back: back)
                     return
@@ -423,7 +429,7 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     
     
     // Note: stt reference must be passed from ContentView for director
-    func speak(_ text: String, stt: SpeechSTT? = nil, route: Bool = true) {
+    func speak(_ text: String, stt: SpeechSTT? = nil, route: Bool = true, language: String? = nil) {
         Task { @MainActor in
             #if os(iOS)
             if route {
@@ -439,7 +445,12 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
             if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
             lastUtteranceText = text
             let u = AVSpeechUtterance(string: text)
-            if let v = voice { u.voice = v }
+            // Use language-specific voice if provided, otherwise fall back to default voice
+            if let lang = language, let langVoice = AVSpeechSynthesisVoice(language: lang) {
+                u.voice = langVoice
+            } else if let v = voice {
+                u.voice = v
+            }
             u.rate = 0.48
             u.pitchMultiplier = 1.0
             u.volume = 1.0
@@ -450,7 +461,7 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     
     // Awaitable speak that unblocks if stopSpeaking() is pressed
     // stt parameter required for director integration
-    func speakAndWait(_ text: String, stt: SpeechSTT? = nil) async {
+    func speakAndWait(_ text: String, stt: SpeechSTT? = nil, language: String? = nil) async {
         #if os(iOS)
         if let stt = stt, let director = director {
             await director.handle(.toTTS(stt))
@@ -474,7 +485,7 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
                 // This avoids duplicate calls and race conditions
             }
             // Routing already handled above; avoid double-routing.
-            speak(text, stt: stt, route: false)
+            speak(text, stt: stt, route: false, language: language)
         }
     }
     
@@ -1467,9 +1478,9 @@ struct ContentView: View {
     }
     
     // Guard against speaking while app not active (prevents odd resumes)
-    private func safeSpeakAndWait(_ text: String) async {
+    private func safeSpeakAndWait(_ text: String, language: String? = nil) async {
         guard scenePhase == .active else { return }
-        await tts.speakAndWait(text, stt: stt)  // speakAndWait routes once; speak(route:false)
+        await tts.speakAndWait(text, stt: stt, language: language)  // speakAndWait routes once; speak(route:false)
     }
     
     @MainActor
@@ -1827,7 +1838,9 @@ struct ContentView: View {
         
         // Wait for TTS to finish before starting to listen
         // Orchestrator handles TTS→STT transition with quiet fence
-        await safeSpeakAndWait(front)
+        let frontTTS = current?.front_text_tts ?? front
+        let frontLang = current?.front_language
+        await safeSpeakAndWait(frontTTS, language: frontLang)
         
         // Additional settle after TTS finishes to ensure echo has fully died down
         try? await Task.sleep(nanoseconds: 200_000_000) // 200ms additional settle
@@ -2069,7 +2082,9 @@ struct ContentView: View {
                 isListening = false
                 // Show answer immediately, then speak
                 showBackNowAndPrepareToListen(cid2, front2, back2)
-                await safeSpeakAndWait(back2)
+                let backTTS = current?.back_text_tts ?? back2
+                let backLang = current?.back_language
+                await safeSpeakAndWait(backTTS, language: backLang)
                 try? await Task.sleep(nanoseconds: 50_000_000)
                 await listenForAction()
                 return
@@ -2245,14 +2260,18 @@ struct ContentView: View {
         case .readingFront(let cid, let front, let back):
             stopForTransition(true)
             showBackNowAndPrepareToListen(cid, front, back)
-            await safeSpeakAndWait(back)
+            let backTTS = current?.back_text_tts ?? back
+            let backLang = current?.back_language
+            await safeSpeakAndWait(backTTS, language: backLang)
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
 
         case .awaitingAnswer(let cid, let front, let back):
             stopForTransition(true)
             showBackNowAndPrepareToListen(cid, front, back)
-            await safeSpeakAndWait(back)
+            let backTTS = current?.back_text_tts ?? back
+            let backLang = current?.back_language
+            await safeSpeakAndWait(backTTS, language: backLang)
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
 
@@ -2260,14 +2279,18 @@ struct ContentView: View {
             tts.stopSpeaking() // cancel current explanation
             stopForTransition(true)
             showBackNowAndPrepareToListen(cid, front, back)
-            await safeSpeakAndWait(back) // re-read the official answer
+            let backTTS = current?.back_text_tts ?? back
+            let backLang = current?.back_language
+            await safeSpeakAndWait(backTTS, language: backLang) // re-read the official answer
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
 
         case .awaitingAction(_, _, let back):
             // Already showing the back in this state; just speak it again.
             stopForTransition(true)
-            await safeSpeakAndWait(back)
+            let backTTS = current?.back_text_tts ?? back
+            let backLang = current?.back_language
+            await safeSpeakAndWait(backTTS, language: backLang)
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
 
@@ -2275,7 +2298,9 @@ struct ContentView: View {
             // Cancel confirmation; user wants the answer
             stopForTransition(true)
             showBackNowAndPrepareToListen(cid, front, back)
-            await safeSpeakAndWait(back)
+            let backTTS = current?.back_text_tts ?? back
+            let backLang = current?.back_language
+            await safeSpeakAndWait(backTTS, language: backLang)
             try? await Task.sleep(nanoseconds: 50_000_000)
             await listenForAction()
             
@@ -2306,7 +2331,9 @@ struct ContentView: View {
         #if os(iOS)
         await director.handle(.toTTS(stt))
         #endif
-        await tts.speakAndWait(front)
+        let frontTTS = current?.front_text_tts ?? front
+        let frontLang = current?.front_language
+        await tts.speakAndWait(frontTTS, language: frontLang)
         
         // Wait a bit for TTS to settle
         try? await Task.sleep(nanoseconds: 200_000_000) // 200ms settle after TTS
@@ -2336,7 +2363,9 @@ struct ContentView: View {
         #if os(iOS)
         await director.handle(.toTTS(stt))
         #endif
-        await tts.speakAndWait(back)
+        let backTTS = current?.back_text_tts ?? back
+        let backLang = current?.back_language
+        await tts.speakAndWait(backTTS, language: backLang)
         
         // Wait a bit for TTS to settle
         try? await Task.sleep(nanoseconds: 200_000_000) // 200ms settle after TTS

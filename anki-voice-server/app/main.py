@@ -4,15 +4,16 @@ import traceback
 import logging
 import json
 import re
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import httpx
 from dotenv import load_dotenv
-from .normalize import html_to_text
+from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, get_card_info, get_note_info, retrieve_media_file, AC
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC
 from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
@@ -184,15 +185,31 @@ async def current():
                 "details": "Make sure Anki is open with a card ready for review"
             }
         
-        data["front_text"] = html_to_text(data.get("front_html"))
-        data["back_text"]  = html_to_text(data.get("back_html"))
+        # Extract text from README div if present, otherwise use full content
+        # Also extract lang attribute from README div
+        # For front: don't exclude .from-front (there shouldn't be any)
+        # For back: exclude .from-front to avoid picking up front content that's included via {{FrontSide}}
+        front_text_readme, front_lang_from_div = html_to_text_readme_only(data.get("front_html"), exclude_from_front=False)
+        back_text_readme, back_lang_from_div = html_to_text_readme_only(data.get("back_html"), exclude_from_front=True)
         
-        # Get language hints for TTS
+        # For display: use full HTML converted to text (for showing entire card)
+        # For TTS: use only README div content
+        data["front_text"] = html_to_text(data.get("front_html"))  # Full front for display
+        data["back_text"] = html_to_text(data.get("back_html"))     # Full back for display
+        data["front_text_tts"] = front_text_readme  # README div only for TTS
+        data["back_text_tts"] = back_text_readme    # README div only for TTS
+        
+        # Get language hints for TTS (from deck config or note tags)
         card_id = data.get("cardId")
         if card_id:
             lang_hints = await get_language_hints(card_id)
-            data["front_language"] = lang_hints.get("front_language")
-            data["back_language"] = lang_hints.get("back_language")
+            # Use lang attribute from README div if present, otherwise use deck/note config, otherwise default to en-US
+            data["front_language"] = front_lang_from_div or lang_hints.get("front_language") or "en-US"
+            data["back_language"] = back_lang_from_div or lang_hints.get("back_language") or "en-US"
+        else:
+            # Fallback if no card ID
+            data["front_language"] = front_lang_from_div or "en-US"
+            data["back_language"] = back_lang_from_div or "en-US"
         
         return data
         
@@ -300,15 +317,11 @@ async def ask_about_card(inp: AskIn):
 
 @app.post("/delete-note")
 async def delete_current_note(inp: DeleteNoteIn):
-    """Delete the note for the given card ID"""
+    """Suspend the card (safer than deleting - card won't appear in reviews but note is preserved)"""
     try:
-        # Get note ID from card ID
-        note_id = await get_note_id(inp.cardId)
-        if note_id is None:
-            raise HTTPException(404, detail="Could not find note for this card")
-        
-        # Delete the note
-        result = await delete_note(note_id)
+        # Suspend the card directly (no need to get note ID or close reviewer)
+        # Suspending is safe and won't cause crashes
+        result = await suspend_cards([inp.cardId])
         if isinstance(result, dict) and result.get("error"):
             raise HTTPException(502, detail=f"AnkiConnect error: {result['error']}")
         
@@ -316,8 +329,8 @@ async def delete_current_note(inp: DeleteNoteIn):
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Delete note failed: %s\n%s", e, traceback.format_exc())
-        raise HTTPException(500, detail=f"Failed to delete note: {str(e)}")
+        log.error("Suspend card failed: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(500, detail=f"Failed to suspend card: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
