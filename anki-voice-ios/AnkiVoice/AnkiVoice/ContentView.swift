@@ -15,6 +15,8 @@ import OSLog
 
 let tailnetSuffix = "tail73fcb8.ts.net"
 let defaultDevURL = "http://grants-macbook-air.\(tailnetSuffix):8000"
+// Production API URL
+let productionAPIURL = "https://api.grantcurell.com"
 
 // MARK: - Logging
 
@@ -167,7 +169,9 @@ extension ContentView {
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         let session = URLSession(configuration: cfg)
         do {
-            let (data, resp) = try await session.data(from: url)
+            var req = URLRequest(url: url)
+            authService.addAuthHeader(to: &req)
+            let (data, resp) = try await session.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             return try? JSONDecoder().decode(CurrentCard.self, from: data)
         } catch { return nil }
@@ -938,6 +942,7 @@ struct ContentView: View {
     @AppStorage("serverBaseURL") private var server = defaultDevURL
     @AppStorage("didRequestMicOnce") private var didRequestMicOnce = false
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var authService = AuthService.shared
     @State private var current: CurrentCard?
     @State private var state: ReviewState = .idle
     @StateObject private var tts = SpeechTTS()
@@ -959,6 +964,10 @@ struct ContentView: View {
     @State private var selectedDeck: String = ""  // Currently selected deck
     @State private var isLoadingDecks: Bool = false  // Loading state for decks
     @State private var isSyncing: Bool = false  // Loading state for sync
+    @State private var showLinkAnkiForm: Bool = false  // Show Link AnkiWeb form
+    @State private var ankiEmail: String = ""  // AnkiWeb email
+    @State private var ankiPassword: String = ""  // AnkiWeb password
+    @State private var isLinkingAnki: Bool = false  // Loading state for linking
     
     #if os(iOS)
     private let director = AudioDirector()
@@ -987,9 +996,47 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 16) {
-                // Top bar with mute button
+                // Top bar with mute button and register/logout
                 HStack {
+                    // Register/Logout button
+                    if !authService.isAuthenticated {
+                        Button(action: {
+                            authService.signInWithApple()
+                        }) {
+                            HStack {
+                                if authService.isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "person.badge.plus")
+                                }
+                                Text("Register")
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        .disabled(authService.isLoading)
+                    } else {
+                        Button(action: {
+                            authService.logout()
+                        }) {
+                            HStack {
+                                Image(systemName: "person.crop.circle.badge.minus")
+                                Text("Logout")
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                    }
+                    
                     Spacer()
+                    
                     Button(action: {
                         #if os(iOS)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1015,8 +1062,83 @@ struct ContentView: View {
                 
                 Text("Anki Voice").font(.title)
                 
-                // Show server URL input only when idle
-                if case .idle = state {
+                // Show authentication status
+                if authService.isAuthenticated {
+                    Text("Signed in")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                } else {
+                    Text("Not signed in")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                
+                // Show error message if any
+                if let errorMsg = authService.errorMessage {
+                    Text(errorMsg)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal)
+                        .multilineTextAlignment(.center)
+                }
+                
+                // Link AnkiWeb form (only show if authenticated and not linked)
+                if authService.isAuthenticated && !showLinkAnkiForm {
+                    Button("Link AnkiWeb Account") {
+                        showLinkAnkiForm = true
+                    }
+                    .font(.headline)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 20)
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(10)
+                }
+                
+                // Link AnkiWeb form
+                if showLinkAnkiForm {
+                    VStack(spacing: 12) {
+                        Text("Link AnkiWeb Account")
+                            .font(.headline)
+                        
+                        TextField("AnkiWeb Email", text: $ankiEmail)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.emailAddress)
+                            .autocapitalization(.none)
+                            .autocorrectionDisabled()
+                        
+                        SecureField("AnkiWeb Password", text: $ankiPassword)
+                            .textFieldStyle(.roundedBorder)
+                        
+                        HStack {
+                            Button("Cancel") {
+                                showLinkAnkiForm = false
+                                ankiEmail = ""
+                                ankiPassword = ""
+                            }
+                            .foregroundColor(.gray)
+                            
+                            Button("Link") {
+                                Task {
+                                    await linkAnkiWeb()
+                                }
+                            }
+                            .disabled(ankiEmail.isEmpty || ankiPassword.isEmpty || isLinkingAnki)
+                            .foregroundColor(.blue)
+                        }
+                        
+                        if isLinkingAnki {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                    }
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                }
+                
+                // Show server URL input only when idle and not authenticated (for local dev)
+                if case .idle = state && !authService.isAuthenticated {
                     TextField("Server Base URL", text: $server)
                         .textFieldStyle(.roundedBorder)
                         .keyboardType(.URL)
@@ -1024,7 +1146,7 @@ struct ContentView: View {
                         .autocorrectionDisabled(true)
                     
                     // Show validation hint if URL is invalid
-                    if validatedBaseURL() == nil && !server.isEmpty {
+                    if validatedServerURL() == nil && !server.isEmpty {
                         #if DEBUG
                         Text("HTTP allowed only for *.\(tailnetSuffix)")
                             .font(.caption2)
@@ -1463,7 +1585,9 @@ struct ContentView: View {
         let session = URLSession(configuration: config)
         
         do {
-            let (_, response) = try await session.data(from: url)
+            var req = URLRequest(url: url)
+            authService.addAuthHeader(to: &req)
+            let (_, response) = try await session.data(for: req)
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
             await MainActor.run {
                 self.serverHealthStatus = ok ? "Connected" : "Server unreachable"
@@ -1501,10 +1625,20 @@ struct ContentView: View {
         .accessibilityLabel("Mark \(title.lowercased())")
     }
     
-    // Helper to validate and trim server URL
+    // Helper to get API base URL (production for authenticated users, or custom server URL)
+    func validatedBaseURL() -> String? {
+        // If authenticated, use production API
+        if authService.isAuthenticated {
+            return productionAPIURL
+        }
+        // Otherwise use the configured server URL (for local dev)
+        return validatedServerURL()
+    }
+    
+    // Helper to validate and trim server URL (for local dev)
     // Rejects raw IPs and enforces scheme rules per build type
     // Auto-appends tailnet suffix for bare device names
-    private func validatedBaseURL() -> String? {
+    private func validatedServerURL() -> String? {
         var base = server.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Prepend scheme when omitted
@@ -1575,6 +1709,7 @@ struct ContentView: View {
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
         
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
@@ -1798,50 +1933,63 @@ struct ContentView: View {
 
     @MainActor
     func syncAnki() async {
-        guard let base = validatedBaseURL(),
-              let url = URL(string: "\(base)/sync") else {
-            await tts.speakAndWait("Invalid server URL.")
+        // Use auth service to sync via backend API
+        guard authService.isAuthenticated else {
+            await tts.speakAndWait("Please sign in first.")
             return
         }
         
         isSyncing = true
         defer { isSyncing = false }
         
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 60.0  // Sync can take a while
-        
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 60.0
-        config.timeoutIntervalForResource = 90.0
-        let session = URLSession(configuration: config)
-        
         do {
-            let (data, resp) = try await session.data(for: req)
-            
-            guard let httpResp = resp as? HTTPURLResponse else {
-                await tts.speakAndWait("Invalid response from server.")
-                return
-            }
-            
-            if httpResp.statusCode == 200 {
-                // Try to decode response to check status
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let status = json["status"] as? String, status == "ok" {
-                    await tts.speakAndWait("Sync complete.")
-                } else {
-                    await tts.speakAndWait("Sync complete.")
-                }
+            let response = try await authService.syncAnki()
+            if response.status == "ok" {
+                await tts.speakAndWait("Sync complete.")
             } else {
-                // Try to get error message from response
-                let errorMsg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
-                await tts.speakAndWait(errorMsg ?? "Failed to sync.")
+                await tts.speakAndWait("Sync may have failed.")
             }
         } catch {
             #if DEBUG
             print("[SYNC] Error: \(error)")
             #endif
-            await tts.speakAndWait("Cannot reach Anki. \(error.localizedDescription)")
+            await tts.speakAndWait("Cannot sync. \(error.localizedDescription)")
+        }
+    }
+    
+    func linkAnkiWeb() async {
+        guard authService.isAuthenticated else {
+            await tts.speakAndWait("Please sign in first.")
+            return
+        }
+        
+        guard !ankiEmail.isEmpty && !ankiPassword.isEmpty else {
+            await tts.speakAndWait("Please enter both email and password.")
+            return
+        }
+        
+        isLinkingAnki = true
+        defer { isLinkingAnki = false }
+        
+        do {
+            let response = try await authService.linkAnkiWeb(email: ankiEmail, password: ankiPassword)
+            if response.status == "ok" {
+                showLinkAnkiForm = false
+                ankiEmail = ""
+                ankiPassword = ""
+                await tts.speakAndWait("AnkiWeb account linked successfully.")
+                
+                // Optionally trigger initial sync
+                Task {
+                    await syncAnki()
+                }
+            }
+        } catch {
+            #if DEBUG
+            print("[LINK_ANKI] Error: \(error)")
+            #endif
+            let errorMsg = error.localizedDescription
+            await tts.speakAndWait("Failed to link AnkiWeb account. \(errorMsg)")
         }
     }
     
@@ -1923,7 +2071,9 @@ struct ContentView: View {
         var card: CurrentCard?
         for attempt in 0..<2 {
             do {
-                let (data, response) = try await session.data(from: url)
+                var req = URLRequest(url: url)
+                authService.addAuthHeader(to: &req)
+                let (data, response) = try await session.data(for: req)
                 if let httpResponse = response as? HTTPURLResponse {
                     #if DEBUG
                     print("GET /current: HTTP \(httpResponse.statusCode)")
@@ -2659,6 +2809,7 @@ struct ContentView: View {
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONEncoder().encode(p)
         
@@ -3187,6 +3338,7 @@ struct ContentView: View {
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let body: [String: Any] = ["cardId": cardId]
@@ -3249,6 +3401,7 @@ struct ContentView: View {
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONEncoder().encode(p)
         
@@ -3313,6 +3466,7 @@ struct ContentView: View {
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
         struct Payload: Encodable {
@@ -3421,6 +3575,7 @@ struct ContentView: View {
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
         
         do {
             let (data, response) = try await session.data(for: req)

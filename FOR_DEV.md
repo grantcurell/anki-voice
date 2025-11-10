@@ -30,6 +30,21 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  │  • Text-to-Speech (AVSpeechSynthesizer)             │  │
 │  │  • HTTP Client (URLSession)                         │  │
 │  │  • State Machine (ReviewState enum)                 │  │
+│  │  • Authentication UI (Register/Logout buttons)      │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  AuthService.swift                                    │  │
+│  │  • Sign in with Apple integration                    │  │
+│  │  • JWT token management                               │  │
+│  │  • API authentication (Authorization headers)       │  │
+│  │  • AnkiWeb credential linking                        │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  KeychainHelper.swift                                 │  │
+│  │  • Secure JWT storage in iOS Keychain                │  │
+│  │  • Credential retrieval on app launch                │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐  │
@@ -45,8 +60,27 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                            │
+                           │ HTTPS/JSON
+                           │ Production: https://api.grantcurell.com
+                           │ Dev: http://<mac-ip>:8000 (when not authenticated)
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Backend API (Kubernetes)                        │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  POST /auth/apple - Apple Sign-In authentication     │  │
+│  │  POST /anki/link - Link AnkiWeb credentials          │  │
+│  │  POST /anki/sync - Trigger Anki sync                  │  │
+│  │  POST /secrets/decrypt - Decrypt credentials (sidecar)│ │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  Gateway Service                                       │  │
+│  │  POST /ac - Proxy AnkiConnect requests to tenants     │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                           │
                            │ HTTP/JSON (port 8000)
-                           │ Server URL: http://<mac-ip>:8000
+                           │ Legacy: http://<mac-ip>:8000
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              FastAPI Server (Python 3.12)                    │
@@ -130,14 +164,43 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 
 ### Data Flow (Step-by-Step)
 
+**User Registration and Setup:**
+
+1. **User opens iOS app for the first time**
+   - App shows "Register" button in top-right corner
+   - User taps "Register" button
+   - iOS presents Sign in with Apple dialog
+   - User authenticates with Apple ID
+
+2. **Apple Sign-In completes**
+   - iOS app receives Apple identity token (JWT)
+   - App calls `POST https://api.grantcurell.com/auth/apple` with identity token
+   - Backend API verifies Apple token with Apple's JWKS
+   - Backend creates/updates user account in database
+   - Backend issues app JWT (RS256, 7-day expiration)
+   - App stores JWT and user_id in iOS Keychain
+   - App shows "Signed in" status
+
+3. **User links AnkiWeb account**
+   - App shows "Link AnkiWeb Account" button
+   - User taps button, enters AnkiWeb email and password
+   - App calls `POST https://api.grantcurell.com/anki/link` with credentials
+   - Backend encrypts credentials (libsodium sealed box)
+   - Backend creates tenant in Kubernetes (namespace, PVC, Deployment, etc.)
+   - Backend stores encrypted credentials in database
+   - App shows success message
+   - App optionally triggers initial sync via `POST /anki/sync`
+
 **Complete Review Cycle:**
 
 1. **User taps "Start Review" in iOS app**
-   - iOS app sends `GET /current` to FastAPI server
-   - FastAPI server forwards request to Anki add-on at `http://127.0.0.1:8770/current`
-   - Anki add-on reads current card from `mw.reviewer` and returns HTML
-   - FastAPI server converts HTML to plain text using `html_to_text()`
-   - Server returns JSON with `status`, `cardId`, `front_text`, `back_text`
+   - iOS app checks if authenticated (JWT in Keychain)
+   - If authenticated, uses production API: `https://api.grantcurell.com`
+   - If not authenticated, uses local dev server URL
+   - iOS app sends `GET /current` with `Authorization: Bearer <JWT>` header
+   - Gateway service verifies JWT and routes to user's tenant
+   - Tenant sidecar proxies to AnkiConnect
+   - AnkiConnect returns current card data
 
 2. **iOS app receives card data**
    - Sets state to `.readingFront(cardId, front, back)`
@@ -250,10 +313,12 @@ Anki Voice/
     ├── AnkiVoice/
     │   ├── AnkiVoice/
     │   │   ├── AnkiVoiceApp.swift          # App entry point (@main struct)
-    │   │   ├── ContentView.swift           # Main view (1900+ lines, all app logic)
+    │   │   ├── ContentView.swift           # Main view (3600+ lines, all app logic)
+    │   │   ├── AuthService.swift           # Authentication service (Sign in with Apple, JWT management)
+    │   │   ├── KeychainHelper.swift        # Secure Keychain storage for JWT tokens
     │   │   ├── IntentParser.swift          # Voice command parsing logic
     │   │   ├── Info.plist                  # App metadata, permissions, ATS config
-    │   │   ├── AnkiVoice.entitlements      # App capabilities (speech recognition)
+    │   │   ├── AnkiVoice.entitlements      # App capabilities (speech recognition, Sign in with Apple)
     │   │   └── Assets.xcassets/            # App icon and colors
     │   ├── AnkiVoice.xcodeproj/             # Xcode project file
     │   │   └── project.pbxproj              # Xcode project settings
@@ -475,12 +540,15 @@ cd anki-voice-ios/AnkiVoice
 open AnkiVoice.xcodeproj
 ```
 
-**Configure Project Settings:**
+**Configure Signing & Capabilities:**
 
-1. **Select the AnkiVoice target** in the left sidebar
-2. **Go to "Signing & Capabilities" tab**
-3. **Check "Speech Recognition" capability** - This is REQUIRED
-4. **Check your Apple Developer team** is selected (needed for device deployment)
+1. Select the `AnkiVoice` target in Xcode
+2. Go to "Signing & Capabilities" tab
+3. Select your Team (Apple Developer account)
+4. Xcode will automatically create a provisioning profile
+5. Ensure the following capabilities are enabled:
+   - **Speech Recognition** (automatic from entitlements)
+   - **Sign in with Apple** (required for authentication)
 
 **Verify Info.plist Configuration:**
 
@@ -491,15 +559,32 @@ The `Info.plist` file should already contain:
 
 **These should already be configured. Do NOT remove them.**
 
-**Find Your Mac's IP Address:**
+**Authentication Setup:**
+
+The app now supports two modes:
+
+1. **Production Mode (Authenticated)**:
+   - User signs in with Apple ID
+   - App uses production API: `https://api.grantcurell.com`
+   - All requests include JWT token in Authorization header
+   - User links AnkiWeb account for cloud-based Anki access
+
+2. **Development Mode (Not Authenticated)**:
+   - App uses local dev server URL (configurable in UI)
+   - No authentication required
+   - Direct connection to FastAPI server on Mac
+
+**Get your Mac's IP address (for dev mode only):**
+
 ```bash
 # On your Mac, run:
 ifconfig | grep "inet " | grep -v 127.0.0.1
 
-# Look for something like: inet 192.168.1.153
-# This is the IP address your iPhone needs to connect to
-# Write this down - you'll need it in the iOS app
+# Or use Tailscale MagicDNS:
+# Your Mac's hostname.tail73fcb8.ts.net
 ```
+
+# Write this down - you'll need it in the iOS app (dev mode only)
 
 ### Step 8: Build and Run iOS App
 
@@ -524,17 +609,25 @@ ifconfig | grep "inet " | grep -v 127.0.0.1
 - When prompted for speech recognition - **Tap "Allow"**
 - If you denied these previously, go to iPhone Settings → AnkiVoice → Permissions and enable them
 
-**Configure Server URL:**
-1. In the iOS app, you'll see a text field for "Server URL"
-2. Enter your Mac's IP address: `http://192.168.1.153:8000` (replace with your actual IP)
-3. The URL is persisted using `@AppStorage`, so you only need to set it once
+**First Launch - Production Mode (Recommended):**
 
-**Start Testing:**
-1. Make sure Anki Desktop is open with a card ready for review
-2. Make sure the FastAPI server is running (from Step 6)
-3. Tap **"Authorize STT"** button in the app (if permissions aren't granted)
-4. Tap **"Start Review"** button
-5. The app should fetch the card and speak it
+1. Tap the "Register" button in the top-right corner
+2. Sign in with your Apple ID
+3. App will automatically store your JWT token
+4. Tap "Link AnkiWeb Account" button
+5. Enter your AnkiWeb email and password
+6. App will link your account and provision your cloud Anki environment
+7. Optionally tap "Sync" to perform initial sync
+8. Tap "Start Review" to begin
+
+**First Launch - Development Mode (Local Testing):**
+
+1. If you don't want to authenticate, the app will show a "Server URL" text field
+2. Enter your Mac's IP address or Tailscale MagicDNS hostname
+   - Example: `http://grants-macbook-air.tail73fcb8.ts.net:8000`
+   - Or: `http://192.168.1.50:8000` (your Mac's local IP)
+3. Ensure your FastAPI server is running on your Mac
+4. Tap "Start Review" to begin
 
 ## 📡 Complete API Documentation
 
@@ -1127,6 +1220,114 @@ AnkiConnect is a separate add-on that must be installed in Anki. The server uses
 
 ## 📱 iOS App Architecture
 
+### Authentication and Registration
+
+The iOS app now includes a complete authentication system using Sign in with Apple and JWT tokens.
+
+#### AuthService (`AuthService.swift`)
+
+**Purpose**: Centralized authentication service that handles Sign in with Apple, JWT token management, and API authentication.
+
+**Key Features**:
+- Sign in with Apple integration using `ASAuthorizationController`
+- JWT token storage and retrieval from iOS Keychain
+- Automatic Authorization header injection for all API requests
+- AnkiWeb credential linking
+- Anki sync triggering
+
+**Key Methods**:
+```swift
+// Sign in with Apple
+func signInWithApple()
+
+// Register with backend API
+func registerWithApple(identityToken: String) async throws -> AppleAuthResponse
+
+// Link AnkiWeb credentials
+func linkAnkiWeb(email: String, password: String) async throws -> LinkAnkiResponse
+
+// Trigger Anki sync
+func syncAnki() async throws -> SyncAnkiResponse
+
+// Get stored JWT token
+func getJWT() -> String?
+
+// Add Authorization header to requests
+func addAuthHeader(to request: inout URLRequest)
+
+// Logout (clears Keychain)
+func logout()
+```
+
+**Observable Properties**:
+- `@Published var isAuthenticated: Bool` - Authentication status
+- `@Published var currentUserID: String?` - Current user ID
+- `@Published var isLoading: Bool` - Loading state
+- `@Published var errorMessage: String?` - Error messages
+
+#### KeychainHelper (`KeychainHelper.swift`)
+
+**Purpose**: Secure storage and retrieval of sensitive data (JWT tokens, user IDs) in iOS Keychain.
+
+**Key Methods**:
+```swift
+// Save data to Keychain
+static func save(key: String, value: String, service: String)
+
+// Retrieve data from Keychain
+static func get(key: String, service: String) -> String?
+
+// Delete data from Keychain
+static func delete(key: String, service: String)
+```
+
+**Security**:
+- Uses `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` for maximum security
+- Data is encrypted by iOS Keychain
+- Only accessible when device is unlocked
+- Bound to specific device (not synced via iCloud)
+
+#### Authentication Flow in ContentView
+
+**Registration UI**:
+- "Register" button appears in top-right when not authenticated
+- Tapping button triggers Sign in with Apple
+- Shows loading state during authentication
+- Displays error messages if authentication fails
+
+**Post-Registration**:
+- "Link AnkiWeb Account" button appears after successful registration
+- Form with email and password fields
+- Validates input before submission
+- Shows success/error feedback
+
+**API Integration**:
+- All API requests automatically include `Authorization: Bearer <JWT>` header
+- Production API URL (`https://api.grantcurell.com`) used when authenticated
+- Local dev server URL used when not authenticated (for development)
+
+**URL Routing**:
+```swift
+func validatedBaseURL() -> String? {
+    // If authenticated, use production API
+    if authService.isAuthenticated {
+        return "https://api.grantcurell.com"
+    }
+    // Otherwise use local dev server
+    return validatedServerURL()
+}
+```
+
+#### Entitlements
+
+The app now requires Sign in with Apple capability in `AnkiVoice.entitlements`:
+```xml
+<key>com.apple.developer.applesignin</key>
+<array>
+    <string>Default</string>
+</array>
+```
+
 ### State Machine (ReviewState)
 
 The iOS app uses a state machine to manage the review flow. All state transitions happen in `ContentView.swift`.
@@ -1235,7 +1436,25 @@ awaitingAnswer
 
 #### ContentView
 
-**Purpose**: Main SwiftUI view containing all app logic (~1900 lines).
+**Purpose**: Main SwiftUI view containing all app logic (~3600 lines).
+
+**New Authentication Properties**:
+```swift
+@StateObject private var authService = AuthService.shared
+@State private var showLinkAnkiForm: Bool = false
+@State private var ankiEmail: String = ""
+@State private var ankiPassword: String = ""
+@State private var isLinkingAnki: Bool = false
+```
+
+**New Authentication Methods**:
+```swift
+// Link AnkiWeb account
+func linkAnkiWeb() async
+
+// Sync Anki (now uses auth service)
+func syncAnki() async
+```
 
 **Key Properties**:
 - `@AppStorage("serverBaseURL") private var server` - Server URL (persisted)
@@ -1668,6 +1887,36 @@ curl -X POST http://127.0.0.1:8000/submit-grade \
 
 ## 🐛 Troubleshooting Guide
 
+### Authentication Issues
+
+**"Sign in was canceled"**:
+- User canceled the Sign in with Apple dialog
+- Solution: Tap "Register" again and complete the sign-in process
+
+**"Invalid Apple sign-in token"**:
+- Apple token verification failed on backend
+- Solution: Try signing in again, ensure you're using a valid Apple ID
+
+**"Not authenticated. Please sign in."**:
+- JWT token is missing or expired
+- Solution: Tap "Register" to sign in again, or check if token expired (7-day expiration)
+
+**"Failed to link AnkiWeb account"**:
+- Check error message for specific issue:
+  - "Invalid email or password format" - Verify credentials are correct
+  - "Failed to provision your Anki environment" - Backend provisioning failed, check backend logs
+  - "Anki environment is not ready yet" - Wait a moment and try again
+
+**JWT Token Not Persisting**:
+- Check that Keychain access is working
+- Verify app has proper entitlements
+- Check Xcode console for Keychain errors
+
+**401 Unauthorized on API Calls**:
+- JWT token is missing, expired, or invalid
+- Solution: Log out and sign in again
+- Check that `Authorization: Bearer <JWT>` header is being sent
+
 ### Common Error Messages and Solutions
 
 **"Open Anki on your mac and start a review"**
@@ -1882,6 +2131,31 @@ pip install -r requirements.txt
 
 ## 🔒 Security Considerations
 
+### Authentication and Token Security
+
+**JWT Token Storage**:
+- JWT tokens are stored securely in iOS Keychain
+- Uses `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` for maximum security
+- Tokens are encrypted by iOS and only accessible when device is unlocked
+- Tokens are device-bound (not synced via iCloud Keychain)
+
+**Sign in with Apple**:
+- Uses Apple's secure authentication flow
+- Identity tokens are never stored (only used once for registration)
+- Only the app's JWT token is stored after successful authentication
+
+**API Authentication**:
+- All API requests include `Authorization: Bearer <JWT>` header
+- JWT tokens expire after 7 days
+- Backend API verifies JWT signature using RS256 public key
+- Invalid or expired tokens result in 401 Unauthorized responses
+
+**AnkiWeb Credentials**:
+- Credentials are encrypted using libsodium sealed box encryption
+- Only ciphertext is stored in database
+- Plaintext credentials are never logged or stored insecurely
+- Decryption only happens server-side when needed
+
 ### API Key Protection
 
 **DO**:
@@ -1981,7 +2255,11 @@ pip install -r requirements.txt
 **Test Checklist**:
 - [ ] Server starts without errors
 - [ ] All API endpoints respond correctly
-- [ ] iOS app connects to server
+- [ ] iOS app connects to server (or authenticates with production API)
+- [ ] User can register with Sign in with Apple
+- [ ] JWT token is stored in Keychain
+- [ ] User can link AnkiWeb account
+- [ ] All API calls include Authorization header
 - [ ] Speech recognition captures audio
 - [ ] TTS speaks clearly
 - [ ] Grading works (both rule-based and LLM)
@@ -2145,9 +2423,39 @@ Language is determined by the `lang` attribute in README divs:
 
 ## 🎛️ UI Controls and Buttons
 
+### Authentication UI
+
+**Top Bar (Always Visible)**:
+- **Register Button** (when not authenticated):
+  - Location: Top-left corner
+  - Action: Triggers Sign in with Apple
+  - Shows loading spinner during authentication
+  - Displays error messages if authentication fails
+
+- **Logout Button** (when authenticated):
+  - Location: Top-left corner
+  - Action: Clears JWT token from Keychain and logs out
+  - Returns app to unauthenticated state
+
+- **Microphone Mute Button**:
+  - Location: Top-right corner
+  - Toggles microphone on/off
+  - Visual indicator when muted (red slash icon)
+
+**Authentication Status**:
+- "Signed in" (green text) - User is authenticated
+- "Not signed in" (orange text) - User needs to register
+
+**Link AnkiWeb Section**:
+- "Link AnkiWeb Account" button (appears after authentication)
+- Form with email and password fields
+- Cancel and Link buttons
+- Loading indicator during linking process
+- Success/error feedback via TTS
+
 ### Home Screen (Idle State)
 
-- **Server URL Text Field**: Enter Mac's IP address (e.g., `http://192.168.1.50:8000`)
+- **Server URL Text Field**: Enter Mac's IP address (e.g., `http://192.168.1.50:8000`) - **Only shown in development mode when not authenticated**
 - **Authorize Speech & Mic Button**: Requests permissions (only shown if not granted)
 - **Open Settings Button**: Opens iPhone Settings (shown if permissions denied)
 - **Deck Selection Dropdown**: Select which deck to review (loads via `/decks` endpoint)
