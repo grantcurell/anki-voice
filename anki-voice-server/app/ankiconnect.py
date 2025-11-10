@@ -140,3 +140,29 @@ async def gui_deck_review(deck_name: str):
         return None
     except Exception as e:
         raise Exception(f"Failed to open deck reviewer: {str(e)}")
+
+async def sync():
+    """Synchronize the local Anki collection with AnkiWeb"""
+    try:
+        # Sync can take a while, so use a longer timeout
+        payload = {"action": "sync", "version": 6}
+        timeout_seconds = 120.0  # 2 minutes for sync
+        
+        async with httpx.AsyncClient(timeout=timeout_seconds) as x:
+            r = await x.post(AC, json=payload)
+            r.raise_for_status()
+            result = r.json()
+            
+        if isinstance(result, dict):
+            if result.get("error"):
+                raise Exception(result["error"])
+            return result.get("result")
+        return None
+    except httpx.ConnectError:
+        raise Exception("Cannot connect to AnkiConnect. Make sure Anki is running and AnkiConnect add-on is installed.")
+    except httpx.TimeoutException:
+        raise Exception("Sync timeout. The sync operation is taking longer than expected.")
+    except httpx.HTTPStatusError as e:
+        raise Exception(f"AnkiConnect error: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        raise Exception(f"Failed to sync: {str(e)}")

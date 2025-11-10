@@ -73,7 +73,8 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  app/normalize.py                                    │  │
 │  │  • html_to_text() - Strips HTML for TTS              │  │
-│  │  • normalize_text() - Normalizes speech transcripts  │  │
+│  │  • html_to_text_readme_only() - Extracts README div │  │
+│  │  • normalize_text() - Normalizes speech transcripts │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐  │
@@ -82,6 +83,11 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  │  • show_answer() - Reveals card back                  │  │
 │  │  • answer_card(ease) - Submits grade                  │  │
 │  │  • undo_review() - Undoes last grade                  │  │
+│  │  • get_deck_names() - Gets all deck names              │  │
+│  │  • gui_deck_review() - Switches to a deck             │  │
+│  │  • sync() - Synchronizes with AnkiWeb                  │  │
+│  │  • suspend_cards() - Suspends cards                    │  │
+│  │  • retrieve_media_file() - Reads from media folder    │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                            │
@@ -148,9 +154,13 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 
 4. **User provides answer**
    - iOS app detects one of several paths:
-     - **"Read Answer" phrases** → Calls `handleReadAnswer()`, skips LLM
+     - **"Reread Question" phrases** → Calls `handleRereadQuestion()`, repeats question, stays in answer phase
+     - **"Reread Answer" phrases** → Calls `handleRereadAnswer()`, reads answer, stays in answer phase
+     - **"Read Answer" phrases** → Calls `handleReadAnswer()`, skips LLM, moves to action phase
+     - **"Delete Note" phrases** → Transitions to `.confirmingDelete`, asks for confirmation
+     - **"I don't know"** → Reads back text, skips LLM, moves to action phase
+     - **"Undo" phrases** → Calls `undoLastGrade()`, undoes last grade, returns to previous card
      - **Unambiguous grade** (e.g., "good") → Immediately submits grade, skips LLM
-     - **"I don't know"** → Reads back text, skips LLM
      - **Normal path** → Sends to LLM for grading
 
 5. **Grading with LLM (normal path)**
@@ -185,7 +195,7 @@ Traditional Anki review requires visual attention and manual clicking. This syst
    - **Ambiguous grade** (e.g., "that was good") → Transitions to `.confirmingGrade`, asks for confirmation
    - **Question** → Sends to `/ask` endpoint, speaks answer
    - **"Read Answer"** → Reads back text again
-   - **"Undo"** → Calls `/undo` endpoint, reverts last grade
+   - **"Undo"** → Calls `/undo` endpoint, reverts last grade, returns to previous card
 
 9. **Grade submission**
    - iOS app sends `POST /submit-grade` with `{cardId, ease}`
@@ -578,8 +588,12 @@ curl http://127.0.0.1:8000/health
   "cardId": 123,
   "front_html": "<html>Card front with formatting</html>",
   "back_html": "<html>Card back with formatting</html>",
-  "front_text": "Plain text version of card front",
-  "back_text": "Plain text version of card back"
+  "front_text": "Plain text version of card front (full content for display)",
+  "back_text": "Plain text version of card back (full content for display)",
+  "front_text_tts": "Content from README div only (for TTS)",
+  "back_text_tts": "Content from README div only (for TTS)",
+  "front_language": "es-ES",
+  "back_language": "en-US"
 }
 ```
 
@@ -603,8 +617,12 @@ curl http://127.0.0.1:8000/current
 
 **Implementation Details**:
 - Server forwards request to Anki add-on at `http://127.0.0.1:8770/current`
-- Server uses `html_to_text()` from `normalize.py` to convert HTML to plain text
-- Plain text is added as `front_text` and `back_text` fields
+- Server uses `html_to_text()` from `normalize.py` to convert HTML to plain text for display
+- Server uses `html_to_text_readme_only()` to extract only README div content for TTS
+- Server extracts `lang` attributes from README divs (innermost lang attribute is authoritative)
+- Server gets language hints from deck config files (`_ankiVoice.deck.<deck>.json`) or note tags (`av:front=`, `av:back=`)
+- Language priority: README div `lang` attribute > deck config > note tags > default `en-US`
+- Returns both full text (for display) and README-only text (for TTS) with language hints
 
 **Error Cases**:
 - `"Cannot connect to Anki add-on"` - Add-on not running or Anki not open
@@ -928,6 +946,154 @@ curl -X POST http://127.0.0.1:8000/show-answer
 
 ---
 
+#### GET /decks
+
+**Purpose**: Get a list of all available deck names from Anki.
+
+**Request**: No parameters needed.
+
+**Response (Success)**:
+```json
+{
+  "status": "ok",
+  "decks": ["Deck 1", "Deck 2", "Spanish 1", "Math Basics"]
+}
+```
+
+**Error Responses**:
+- `502 Bad Gateway`: `"Failed to get decks: <error message>"`
+
+**Example**:
+```bash
+curl http://127.0.0.1:8000/decks
+```
+
+**Status Codes**:
+- `200 OK` - Request succeeded
+- `502 Bad Gateway` - AnkiConnect error
+
+**Implementation Details**:
+- Calls `get_deck_names()` which uses AnkiConnect's `deckNames` action
+- Returns list of all deck names as strings
+
+---
+
+#### POST /switch-deck
+
+**Purpose**: Switch Anki's reviewer to a different deck.
+
+**Request**: Query parameter `name` (deck name as string)
+
+**Response (Success)**:
+```json
+{
+  "status": "ok",
+  "deck": "Spanish 1"
+}
+```
+
+**Error Responses**:
+- `404 Not Found`: `"Deck not found: <deck name>"`
+- `502 Bad Gateway`: `"Failed to switch deck: <error message>"`
+
+**Example**:
+```bash
+curl -X POST "http://127.0.0.1:8000/switch-deck?name=Spanish%201"
+```
+
+**Status Codes**:
+- `200 OK` - Deck switched successfully
+- `404 Not Found` - Deck name not found
+- `502 Bad Gateway` - AnkiConnect error
+
+**Implementation Details**:
+1. Validates that the deck exists using `get_deck_names()`
+2. Calls `gui_deck_review(deck_name)` which uses AnkiConnect's `guiDeckReview` action
+3. Opens the reviewer for the specified deck in Anki Desktop
+
+**Note**: After switching decks, the iOS app should call `/current` to fetch the new deck's current card.
+
+---
+
+#### POST /sync
+
+**Purpose**: Synchronize Anki collection with AnkiWeb.
+
+**Request**: No parameters needed.
+
+**Response (Success)**:
+```json
+{
+  "status": "ok",
+  "result": null
+}
+```
+
+**Error Responses**:
+- `502 Bad Gateway`: `"Failed to sync: <error message>"`
+
+**Example**:
+```bash
+curl -X POST http://127.0.0.1:8000/sync
+```
+
+**Status Codes**:
+- `200 OK` - Sync completed successfully
+- `502 Bad Gateway` - AnkiConnect error or timeout
+
+**Implementation Details**:
+- Calls `sync()` which uses AnkiConnect's `sync` action
+- Uses a 120-second timeout (sync can take a while for large collections)
+- Synchronizes the local Anki collection with AnkiWeb
+
+**Timeout**: 120 seconds (2 minutes)
+
+---
+
+#### POST /delete-note
+
+**Purpose**: Suspend a card (safer than deleting - card won't appear in reviews but note is preserved).
+
+**Request Body**:
+```json
+{
+  "cardId": 123
+}
+```
+
+**Response (Success)**:
+```json
+{
+  "result": null,
+  "error": null
+}
+```
+
+**Error Responses**:
+- `502 Bad Gateway`: `"AnkiConnect error: <error message>"`
+- `500 Internal Server Error`: `"Failed to suspend card: <error message>"`
+
+**Example**:
+```bash
+curl -X POST http://127.0.0.1:8000/delete-note \
+  -H "Content-Type: application/json" \
+  -d '{"cardId": 123}'
+```
+
+**Status Codes**:
+- `200 OK` - Card suspended successfully
+- `502 Bad Gateway` - AnkiConnect error
+- `500 Internal Server Error` - Server-side error
+
+**Implementation Details**:
+- Calls `suspend_cards([cardId])` which uses AnkiConnect's `suspend` action
+- Suspends the card (it won't appear in reviews but the note is preserved)
+- This is safer than deleting, which can cause Anki to crash if done on the currently displayed card
+
+**Note**: Despite the endpoint name "delete-note", this actually suspends the card. The name is kept for backward compatibility with the iOS app.
+
+---
+
 ### AnkiConnect API (Internal)
 
 **Base URL**: `http://127.0.0.1:8765`
@@ -938,6 +1104,13 @@ AnkiConnect is a separate add-on that must be installed in Anki. The server uses
 - `guiShowAnswer` - Shows the card back in Anki reviewer
 - `guiAnswerCard` - Submits a grade (ease: 1-4)
 - `guiUndoReview` - Undoes the last review action
+- `deckNames` - Gets list of all deck names
+- `guiDeckReview` - Opens reviewer for a specific deck
+- `sync` - Synchronizes collection with AnkiWeb
+- `suspend` - Suspends cards (they won't appear in reviews)
+- `cardsInfo` - Gets card information including deck name
+- `notesInfo` - Gets note information including tags
+- `retrieveMediaFile` - Retrieves files from Anki's media folder
 
 **All AnkiConnect calls use version 6 of the API.**
 
@@ -960,13 +1133,14 @@ The iOS app uses a state machine to manage the review flow. All state transition
 
 **State Enum**:
 ```swift
-enum ReviewState {
+enum ReviewState: Equatable {
     case idle
     case readingFront(cardId: Int, front: String, back: String)
     case awaitingAnswer(cardId: Int, front: String, back: String)
     case explaining(cardId: Int, front: String, back: String, explanation: String)
     case awaitingAction(cardId: Int, front: String, back: String)
     case confirmingGrade(cardId: Int, ease: Int, front: String, back: String)
+    case confirmingDelete(cardId: Int, front: String, back: String)
 }
 ```
 
@@ -1019,6 +1193,14 @@ enum ReviewState {
    - User can confirm or cancel
    - Transitions to `.awaitingAction` after confirmation/cancellation
 
+7. **`.confirmingDelete(cardId, front, back)`**
+   - User said "delete note" during answer phase
+   - TTS is asking for confirmation
+   - UI displays answer text
+   - User can confirm or cancel
+   - If confirmed, suspends the card and advances to next card
+   - If cancelled, returns to `.awaitingAnswer` state
+
 **State Transition Diagram**:
 ```
 idle
@@ -1037,6 +1219,12 @@ awaitingAnswer
   │    ↓ (grade or question)
   │    confirmingGrade (if ambiguous)
   │    OR readingFront (if grade submitted)
+  │
+  ├→ confirmingDelete (if "delete note")
+  │    ↓ (confirmed)
+  │    readingFront (next card, card suspended)
+  │    ↓ (cancelled)
+  │    awaitingAnswer
   │
   └→ awaitingAction (if immediate grade voice command)
         ↓ (grade submitted)
@@ -1124,10 +1312,43 @@ awaitingAnswer
    - Returns to `.awaitingAction` state
 
 10. **`undoLastGrade() async`**
-    - Sends `POST /undo` to server
-    - Calls `startReview()` to refetch current card
+    - Sends `POST /undo` to server (calls AnkiConnect's `guiUndoReview`)
+    - Calls `startReview()` to refetch current card (which will be the previous card after undo)
 
-11. **`stopAllIO(deactivateSession:)`**
+11. **`handleRereadQuestion() async`**
+    - Rereads the question using TTS
+    - Stays in `.awaitingAnswer` state
+    - Resumes listening for answer
+
+12. **`handleRereadAnswer() async`**
+    - Rereads the answer using TTS
+    - Stays in `.awaitingAnswer` state
+    - Resumes listening for answer
+
+13. **`listenForDeleteConfirmation() async`**
+    - Listens for confirmation after user says "delete note"
+    - If confirmed, calls `/delete-note` endpoint (suspends card)
+    - Advances to next card or returns to answer phase if cancelled
+
+14. **`switchDeck(to deck: String) async`**
+    - Sends `POST /switch-deck` to server
+    - Calls `startReview()` to fetch current card from new deck
+
+15. **`fetchDecks() async`**
+    - Sends `GET /decks` to server
+    - Populates `availableDecks` state variable
+
+16. **`syncAnki() async`**
+    - Sends `POST /sync` to server
+    - Shows loading indicator while syncing
+    - Provides TTS feedback when complete
+
+17. **`returnToDeckSelection() async`**
+    - Stops all audio I/O
+    - Resets state to `.idle`
+    - Returns to home screen
+
+18. **`stopAllIO(deactivateSession:)`**
     - Stops TTS and STT
     - Optionally deactivates `AVAudioSession`
     - Used during state transitions
@@ -1786,6 +2007,172 @@ pip install -r requirements.txt
 - `anki-voice-server/README.md` - Server-specific docs
 - `anki-voice-ios/README.md` - iOS-specific docs
 - This file (`FOR_DEV.md`) - Comprehensive developer guide
+
+---
+
+## 🎤 Complete Voice Commands Reference
+
+### Commands During Answer Phase
+
+These commands work while you're providing your answer or after you've finished speaking:
+
+#### Reread Question
+- `"reread question"`, `"reread the question"`, `"say the question again"`, `"read question again"`, `"repeat question"`, `"repeat the question"`
+- **Implementation**: `handleRereadQuestion()` in `ContentView.swift`
+- **Behavior**: Repeats the question without changing state, stays in `.awaitingAnswer`
+
+#### Reread Answer
+- `"reread answer"`, `"reread the answer"`, `"say the answer again"`, `"read answer again"`
+- **Implementation**: `handleRereadAnswer()` in `ContentView.swift`
+- **Behavior**: Reads the answer while still in answer phase (before grading)
+
+#### Read Answer (Skip Grading)
+- `"read answer"`, `"read the answer"`, `"show answer"`, `"tell me the answer"`
+- **Implementation**: `handleReadAnswer()` in `ContentView.swift`
+- **Behavior**: Skips LLM grading, reads answer, moves to action phase
+
+#### I Don't Know
+- `"i don't know"`, `"i have no idea"`, `"i'm not sure"`, `"no idea"`, `"don't know"`, `"i dunno"`
+- **Implementation**: Detected in `listenForAnswerContinuous()` in `ContentView.swift`
+- **Behavior**: Skips LLM, immediately shows and reads answer, moves to action phase
+
+#### Delete Note (Suspend Card)
+- `"delete note"`, `"delete the note"`, `"remove note"`, `"remove the note"`, `"delete this note"`, `"delete card"`, `"delete the card"`
+- **Implementation**: `listenForDeleteConfirmation()` and `/delete-note` endpoint
+- **Behavior**: Asks for confirmation, then suspends card (preserves note), advances to next card
+
+#### Undo Last Grade
+- `"undo"`, `"change"`, `"take back"`, `"undo that"`, `"change that"`
+- **Implementation**: `undoLastGrade()` in `ContentView.swift`, calls `/undo` endpoint
+- **Behavior**: Undoes last grade, returns to previous card
+
+#### Immediate Grade Commands
+- Unambiguous grade commands (see Grade Commands section) can be used during answer phase
+- **Implementation**: Detected in `listenForAnswerContinuous()` via `IntentParser.parse()`
+- **Behavior**: Skips LLM, immediately submits grade, advances to next card
+
+### Commands During Action Phase
+
+After the explanation is read, you can use these commands:
+
+#### Grade Commands
+- **Unambiguous**: `"good"`, `"grade 3"`, `"mark one"`, `"hard"`, `"easy"`, etc.
+- **Ambiguous**: `"that was good"`, `"pretty easy"`, `"kind of hard"` (requires confirmation)
+- **Implementation**: `IntentParser.parse()` in `IntentParser.swift`, handled in `listenForAction()`
+- **Behavior**: Unambiguous grades submit immediately, ambiguous grades require confirmation
+
+#### Question Commands
+- Any sentence starting with question words (what, why, how, when, where, who, which)
+- Phrases containing: `"explain"`, `"clarify"`, `"tell me"`, `"give me"`, `"help me"`, `"don't understand"`, `"not clear"`
+- **Implementation**: `IntentParser.parse()` detects questions, handled in `listenForAction()`
+- **Behavior**: Sends to `/ask` endpoint, speaks GPT-5's answer
+
+#### Read Answer (During Action Phase)
+- `"read answer"`, `"read the answer"`, `"show answer"`, `"tell me the answer"`
+- **Implementation**: `handleReadAnswer()` in `ContentView.swift`
+- **Behavior**: Reads the answer text again
+
+#### Undo Commands (During Action Phase)
+- `"undo"`, `"change"`, `"take back"`
+- **Implementation**: `undoLastGrade()` in `ContentView.swift`
+- **Behavior**: Undoes last grade, returns to previous card
+
+### Grade Command Details
+
+**Ease 1 (Again)**:
+- Words: `"again"`, `"wrong"`, `"repeat"`, `"fail"`, `"failed"`, `"miss"`, `"missed"`, `"red"`
+- Numbers: `"grade 1"`, `"mark one"`, `"mark it 1"`, `"set to 1"`
+
+**Ease 2 (Hard)**:
+- Words: `"hard"`, `"difficult"`, `"struggled"`
+- Numbers: `"grade 2"`, `"mark two"`, `"mark it 2"`
+
+**Ease 3 (Good)**:
+- Words: `"good"`, `"ok"`, `"okay"`, `"decent"`, `"solid"`, `"correct"`
+- Numbers: `"grade 3"`, `"mark three"`, `"mark it 3"`
+
+**Ease 4 (Easy)**:
+- Words: `"easy"`, `"trivial"`, `"simple"`
+- Numbers: `"grade 4"`, `"mark four"`, `"mark it 4"`
+
+**Unambiguous Detection**:
+- Explicit numerals: `"grade 3"`, `"mark 2"` → always unambiguous
+- Number words with verbs: `"grade three"`, `"mark two"` → unambiguous
+- Bare grade words: `"good"`, `"hard"` → unambiguous if single word or with verb
+- Ambiguous phrases: `"that was good"`, `"pretty easy"` → requires confirmation
+
+## 🌍 Multilingual TTS Implementation
+
+### README Div Extraction
+
+The app uses a special HTML structure to control what gets read by TTS:
+
+- **Display**: Shows the entire card (all HTML content converted to text)
+- **TTS**: Only reads content inside `<div>` elements with the `README` class
+
+### Language Detection
+
+Language is determined by the `lang` attribute in README divs:
+
+```html
+<div class="README" lang="es-ES">Spanish text</div>
+<div class="english README" lang="en-US">English text</div>
+```
+
+**Language Priority**:
+1. Innermost `lang` attribute within README div (most specific/nested)
+2. Deck-level configuration (from `_ankiVoice.deck.<deck>.json` in Anki media folder)
+3. Note-level tags (e.g., `av:front=es-ES`, `av:back=en-US`)
+4. Default: `en-US` (English)
+
+### Implementation Details
+
+**Server Side** (`app/main.py`):
+- `get_deck_language_config()`: Reads deck config from Anki media folder
+- `extract_lang_from_tags()`: Extracts language from note tags
+- `get_language_hints()`: Combines deck config and note tags
+- `/current` endpoint returns `front_language` and `back_language` hints
+
+**HTML Processing** (`app/normalize.py`):
+- `html_to_text_readme_only()`: Extracts text from README divs only
+- Finds innermost `lang` attribute (most deeply nested element with lang)
+- Excludes README divs inside `.from-front` containers (prevents reading front content on back card)
+
+**iOS Side** (`ContentView.swift`):
+- `SpeechTTS.speak()` and `speakAndWait()` accept optional `language` parameter
+- Uses `AVSpeechSynthesisVoice(language:)` to select appropriate voice
+- All TTS calls pass `current?.front_language` or `current?.back_language`
+
+## 🎛️ UI Controls and Buttons
+
+### Home Screen (Idle State)
+
+- **Server URL Text Field**: Enter Mac's IP address (e.g., `http://192.168.1.50:8000`)
+- **Authorize Speech & Mic Button**: Requests permissions (only shown if not granted)
+- **Open Settings Button**: Opens iPhone Settings (shown if permissions denied)
+- **Deck Selection Dropdown**: Select which deck to review (loads via `/decks` endpoint)
+- **Start Review Button**: Begins review session (changes to "Return to deck selection" during review)
+- **Sync Button**: Synchronizes Anki with AnkiWeb (only shown when idle)
+
+### During Review
+
+- **Mute Button**: Mutes/unmutes microphone (top-right corner)
+- **Read Answer Button**: Skips LLM grading, reads answer
+- **Grade Buttons**: Again/Hard/Good/Easy (state-dependent behavior)
+- **"Say 'undo' to change the last grade" Hint**: Reminder text below grade buttons
+
+### Button Behaviors
+
+**Grade Buttons**:
+- **During question reading**: Skips to answer phase
+- **During answer phase**: Immediately submits grade (skips LLM)
+- **During explanation**: Stops TTS, immediately submits grade
+- **During action phase**: Immediately submits grade
+- **During confirmation**: Confirms pending grade
+
+**Start Review / Return to Deck Selection**:
+- **Start Review**: Fetches card, speaks question, begins listening
+- **Return to Deck Selection**: Stops I/O, resets to idle state
 
 ---
 

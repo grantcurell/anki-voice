@@ -13,7 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync
 from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
@@ -343,6 +343,16 @@ async def switch_deck_endpoint(name: str):
     except Exception as e:
         log.error("Failed to switch deck: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Failed to switch deck: {str(e)}")
+
+@app.post("/sync")
+async def sync_endpoint():
+    """Synchronize Anki collection with AnkiWeb"""
+    try:
+        result = await sync()
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        log.error("Failed to sync: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=502, detail=f"Failed to sync: {str(e)}")
 
 @app.post("/delete-note")
 async def delete_current_note(inp: DeleteNoteIn):

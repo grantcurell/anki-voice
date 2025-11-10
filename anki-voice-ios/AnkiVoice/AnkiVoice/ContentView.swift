@@ -958,6 +958,7 @@ struct ContentView: View {
     @State private var availableDecks: [String] = []  // List of available decks
     @State private var selectedDeck: String = ""  // Currently selected deck
     @State private var isLoadingDecks: Bool = false  // Loading state for decks
+    @State private var isSyncing: Bool = false  // Loading state for sync
     
     #if os(iOS)
     private let director = AudioDirector()
@@ -1163,6 +1164,30 @@ struct ContentView: View {
                     }
                 }
                 .disabled(state == .idle && (!canStart || isBusy))
+                
+                // Sync button (only shown when idle)
+                if case .idle = state {
+                    Button {
+                        Task {
+                            await syncAnki()
+                        }
+                    } label: {
+                        HStack {
+                            if isSyncing {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .padding(.trailing, 8)
+                            }
+                            Text(isSyncing ? "Syncing..." : "Sync")
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                    }
+                    .background(Color.blue.opacity(0.12))
+                    .cornerRadius(10)
+                    .disabled(isSyncing)
+                }
 
                 // Card displaying current prompt/answer
                 if !displayText.isEmpty {
@@ -1771,6 +1796,55 @@ struct ContentView: View {
         }
     }
 
+    @MainActor
+    func syncAnki() async {
+        guard let base = validatedBaseURL(),
+              let url = URL(string: "\(base)/sync") else {
+            await tts.speakAndWait("Invalid server URL.")
+            return
+        }
+        
+        isSyncing = true
+        defer { isSyncing = false }
+        
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 60.0  // Sync can take a while
+        
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60.0
+        config.timeoutIntervalForResource = 90.0
+        let session = URLSession(configuration: config)
+        
+        do {
+            let (data, resp) = try await session.data(for: req)
+            
+            guard let httpResp = resp as? HTTPURLResponse else {
+                await tts.speakAndWait("Invalid response from server.")
+                return
+            }
+            
+            if httpResp.statusCode == 200 {
+                // Try to decode response to check status
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let status = json["status"] as? String, status == "ok" {
+                    await tts.speakAndWait("Sync complete.")
+                } else {
+                    await tts.speakAndWait("Sync complete.")
+                }
+            } else {
+                // Try to get error message from response
+                let errorMsg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+                await tts.speakAndWait(errorMsg ?? "Failed to sync.")
+            }
+        } catch {
+            #if DEBUG
+            print("[SYNC] Error: \(error)")
+            #endif
+            await tts.speakAndWait("Cannot reach Anki. \(error.localizedDescription)")
+        }
+    }
+    
     @MainActor
     func returnToDeckSelection() async {
         // Stop all audio I/O
