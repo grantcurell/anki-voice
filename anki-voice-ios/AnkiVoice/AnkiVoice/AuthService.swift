@@ -6,7 +6,9 @@
 //
 
 import Foundation
+#if !NO_SIWA
 import AuthenticationServices
+#endif
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -79,7 +81,7 @@ class AuthService: NSObject, ObservableObject {
     // MARK: - Keychain Management
     
     private func loadStoredCredentials() {
-        if let jwt = KeychainHelper.get(key: jwtKey, service: keychainService),
+        if let _ = KeychainHelper.get(key: jwtKey, service: keychainService),
            let userID = KeychainHelper.get(key: userIDKey, service: keychainService) {
             self.currentUserID = userID
             self.isAuthenticated = true
@@ -109,6 +111,7 @@ class AuthService: NSObject, ObservableObject {
     
     // MARK: - Sign in with Apple
     
+    #if !NO_SIWA
     func signInWithApple() {
         let provider = ASAuthorizationAppleIDProvider()
         let request = provider.createRequest()
@@ -119,6 +122,13 @@ class AuthService: NSObject, ObservableObject {
         authorizationController.presentationContextProvider = self
         authorizationController.performRequests()
     }
+    #else
+    func signInWithApple() {
+        // Dev build without SiwA: show error message
+        self.errorMessage = "Sign in with Apple is disabled in Debug builds."
+        appLog("Sign in with Apple attempted but disabled in Debug build", category: "auth")
+    }
+    #endif
     
     // MARK: - API Calls
     
@@ -303,6 +313,7 @@ class AuthService: NSObject, ObservableObject {
 
 // MARK: - ASAuthorizationControllerDelegate
 
+#if !NO_SIWA
 extension AuthService: ASAuthorizationControllerDelegate {
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
@@ -351,9 +362,9 @@ extension AuthService: ASAuthorizationControllerDelegate {
                 case .notHandled:
                     self.errorMessage = "Sign in not handled"
                 case .unknown:
-                    self.errorMessage = "Unknown error during sign in"
+                    self.errorMessage = "Unknown sign-in error"
                 @unknown default:
-                    self.errorMessage = "Unknown error"
+                    self.errorMessage = "Unrecognized sign-in error"
                 }
             } else {
                 self.errorMessage = error.localizedDescription
@@ -362,20 +373,25 @@ extension AuthService: ASAuthorizationControllerDelegate {
         }
     }
 }
+#endif
 
 // MARK: - ASAuthorizationControllerPresentationContextProviding
 
+#if !NO_SIWA
 extension AuthService: ASAuthorizationControllerPresentationContextProviding {
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
         // Get the window from the scene
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first {
+        if let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) {
             return window
         }
-        // Fallback (shouldn't happen)
-        return UIApplication.shared.windows.first ?? UIWindow()
+        // Last resort (rare in practice)
+        return UIWindow(frame: UIScreen.main.bounds)
     }
 }
+#endif
 
 // MARK: - Auth Errors
 

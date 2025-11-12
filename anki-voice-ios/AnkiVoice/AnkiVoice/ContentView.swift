@@ -998,164 +998,25 @@ struct ContentView: View {
         ZStack {
             VStack(spacing: 16) {
                 // Top bar with mute button and register/logout
-                HStack {
-                    // Register/Logout button
-                    if !authService.isAuthenticated {
-                        Button(action: {
-                            showAuthSheet = true
-                        }) {
-                            HStack {
-                                Image(systemName: "person.badge.plus")
-                                Text("Register / Sign in")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.blue.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                        #if !DEBUG
-                        // Show Sign in with Apple button in Release builds
-                        Button(action: {
-                            authService.signInWithApple()
-                        }) {
-                            HStack {
-                                if authService.isLoading {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Image(systemName: "applelogo")
-                                }
-                                Text("Sign in with Apple")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                        .disabled(authService.isLoading)
-                        #endif
-                    } else {
-                        Button(action: {
-                            authService.logout()
-                        }) {
-                            HStack {
-                                Image(systemName: "person.crop.circle.badge.minus")
-                                Text("Logout")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        #if os(iOS)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        #endif
-                        stt.setMuted(!stt.isMuted)
-                    }) {
-                        Image(systemName: stt.isMuted ? "mic.slash.fill" : "mic.fill")
-                            .font(.title2)
-                            .foregroundColor(stt.isMuted ? .red : .primary)
-                            .padding(8)
-                            .overlay(
-                                Group {
-                                    if stt.isMuted {
-                                        Circle().stroke(Color.red, lineWidth: 1.5)
-                                    }
-                                }
-                            )
-                            .accessibilityLabel(stt.isMuted ? "Microphone muted" : "Microphone on")
-                            .accessibilityHint("Double tap to toggle microphone")
-                    }
-                }
-                .padding(.horizontal)
+                TopBarView(authService: authService, stt: stt, showAuthSheet: $showAuthSheet)
                 
                 Text("Anki Voice").font(.title)
                 
                 // Show authentication status
-                if authService.isAuthenticated {
-                    Text("Signed in")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else {
-                    Text("Not signed in")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
-                
-                // Show error message if any
-                if let errorMsg = authService.errorMessage {
-                    Text(errorMsg)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .padding(.horizontal)
-                        .multilineTextAlignment(.center)
-                }
-                
-                // Link AnkiWeb form (only show if authenticated and not linked)
-                if authService.isAuthenticated && !showLinkAnkiForm {
-                    Button("Link AnkiWeb Account") {
-                        showLinkAnkiForm = true
-                    }
-                    .font(.headline)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 20)
-                    .background(Color.green.opacity(0.1))
-                    .cornerRadius(10)
-                }
+                AuthStatusView(authService: authService)
                 
                 // Link AnkiWeb form
-                if showLinkAnkiForm {
-                    VStack(spacing: 12) {
-                        Text("Link AnkiWeb Account")
-                            .font(.headline)
-                        
-                        TextField("AnkiWeb Email", text: $ankiEmail)
-                            .textFieldStyle(.roundedBorder)
-                            .keyboardType(.emailAddress)
-                            .autocapitalization(.none)
-                            .autocorrectionDisabled()
-                        
-                        SecureField("AnkiWeb Password", text: $ankiPassword)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        HStack {
-                            Button("Cancel") {
-                                showLinkAnkiForm = false
-                                ankiEmail = ""
-                                ankiPassword = ""
-                            }
-                            .foregroundColor(.gray)
-                            
-                            Button("Link") {
-                                Task {
-                                    await linkAnkiWeb()
-                                }
-                            }
-                            .disabled(ankiEmail.isEmpty || ankiPassword.isEmpty || isLinkingAnki)
-                            .foregroundColor(.blue)
-                        }
-                        
-                        if isLinkingAnki {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        }
-                    }
-                    .padding()
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(10)
-                    .padding(.horizontal)
-                }
+                LinkAnkiWebFormView(
+                    authService: authService,
+                    showLinkAnkiForm: $showLinkAnkiForm,
+                    ankiEmail: $ankiEmail,
+                    ankiPassword: $ankiPassword,
+                    isLinkingAnki: $isLinkingAnki,
+                    linkAction: linkAnkiWeb
+                )
                 
                 // Show server URL input only when idle and not authenticated (for local dev)
-                if case .idle = state && !authService.isAuthenticated {
+                if case .idle = state, !authService.isAuthenticated {
                     TextField("Server Base URL", text: $server)
                         .textFieldStyle(.roundedBorder)
                         .keyboardType(.URL)
