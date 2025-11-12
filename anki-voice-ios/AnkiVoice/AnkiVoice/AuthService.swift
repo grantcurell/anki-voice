@@ -81,12 +81,19 @@ class AuthService: NSObject, ObservableObject {
     // MARK: - Keychain Management
     
     private func loadStoredCredentials() {
-        if let _ = KeychainHelper.get(key: jwtKey, service: keychainService),
+        if let jwt = KeychainHelper.get(key: jwtKey, service: keychainService),
            let userID = KeychainHelper.get(key: userIDKey, service: keychainService) {
             self.currentUserID = userID
             self.isAuthenticated = true
             appLog("Loaded stored credentials for user: \(userID)", category: "auth")
+        } else {
+            appLog("No stored credentials found", category: "auth")
         }
+    }
+    
+    /// Reload credentials from Keychain (useful after registration/login)
+    func reloadCredentials() {
+        loadStoredCredentials()
     }
     
     func getJWT() -> String? {

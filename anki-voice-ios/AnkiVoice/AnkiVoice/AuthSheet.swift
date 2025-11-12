@@ -91,7 +91,21 @@ struct AuthSheet: View {
                 _ = try await authService.login(email: email, password: password)
             }
             
-            // Success - dismiss the sheet
+            // Success - reload credentials to ensure state is updated
+            // This ensures the JWT is available immediately after registration/login
+            authService.reloadCredentials()
+            
+            // Verify authentication state
+            if authService.isAuthenticated, let jwt = authService.getJWT() {
+                appLog("Authentication successful, JWT available (length: \(jwt.count))", category: "auth")
+            } else {
+                appLog("WARNING: Authentication succeeded but JWT not available", category: "auth")
+            }
+            
+            // Small delay to ensure state propagates to parent view
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            
+            // Dismiss the sheet
             isLoading = false
             dismiss()
         } catch {
