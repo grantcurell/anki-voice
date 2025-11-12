@@ -957,6 +957,7 @@ struct ContentView: View {
     @State private var isBusy = false  // debounce Start Review
     @State private var isSubmittingGrade = false  // prevent concurrent grade submissions
     @State private var showBackDuringProcessing = false  // show back while LLM is grading
+    @State private var showAuthSheet: Bool = false  // Show registration/login sheet
     @State private var lastErrorSpokenAt: Date?  // rate-limit error TTS
     @State private var serverHealthStatus: String?  // "Connected" or "Server unreachable"
     @State private var lastGradedCardId: Int?  // Track last graded card for undo
@@ -1001,16 +1002,11 @@ struct ContentView: View {
                     // Register/Logout button
                     if !authService.isAuthenticated {
                         Button(action: {
-                            authService.signInWithApple()
+                            showAuthSheet = true
                         }) {
                             HStack {
-                                if authService.isLoading {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Image(systemName: "person.badge.plus")
-                                }
-                                Text("Register")
+                                Image(systemName: "person.badge.plus")
+                                Text("Register / Sign in")
                             }
                             .font(.caption)
                             .padding(.horizontal, 12)
@@ -1018,7 +1014,28 @@ struct ContentView: View {
                             .background(Color.blue.opacity(0.1))
                             .cornerRadius(8)
                         }
+                        #if !DEBUG
+                        // Show Sign in with Apple button in Release builds
+                        Button(action: {
+                            authService.signInWithApple()
+                        }) {
+                            HStack {
+                                if authService.isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "applelogo")
+                                }
+                                Text("Sign in with Apple")
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.1))
+                            .cornerRadius(8)
+                        }
                         .disabled(authService.isLoading)
+                        #endif
                     } else {
                         Button(action: {
                             authService.logout()
@@ -1396,6 +1413,9 @@ struct ContentView: View {
                     }
                 }
             }.padding()
+        }
+        .sheet(isPresented: $showAuthSheet) {
+            AuthSheet(authService: authService)
         }
         .onAppear {
             // Check authorization status on app startup
@@ -1960,9 +1980,9 @@ struct ContentView: View {
     func linkAnkiWeb() async {
         guard authService.isAuthenticated else {
             await tts.speakAndWait("Please sign in first.")
-            return
-        }
-        
+                return
+            }
+            
         guard !ankiEmail.isEmpty && !ankiPassword.isEmpty else {
             await tts.speakAndWait("Please enter both email and password.")
             return

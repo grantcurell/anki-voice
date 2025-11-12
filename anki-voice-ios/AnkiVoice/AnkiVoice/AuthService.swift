@@ -23,6 +23,21 @@ struct AppleAuthResponse: Codable {
     let user_id: String
 }
 
+struct AuthOut: Codable {
+    let jwt: String
+    let user_id: String
+}
+
+struct LocalRegisterRequest: Codable {
+    let email: String
+    let password: String
+}
+
+struct LocalLoginRequest: Codable {
+    let email: String
+    let password: String
+}
+
 struct LinkAnkiRequest: Codable {
     let email: String
     let password: String
@@ -209,6 +224,74 @@ class AuthService: NSObject, ObservableObject {
         }
     }
     
+    // MARK: - Local Authentication (Email/Password)
+    
+    func register(email: String, password: String) async throws -> AuthOut {
+        guard let url = URL(string: "\(baseURL)/auth/local/register") else {
+            throw AuthError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body = LocalRegisterRequest(email: email, password: password)
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse
+        }
+        
+        if httpResponse.statusCode == 200 {
+            let authResponse = try JSONDecoder().decode(AuthOut.self, from: data)
+            storeCredentials(jwt: authResponse.jwt, userID: authResponse.user_id)
+            return authResponse
+        } else if httpResponse.statusCode == 409 {
+            throw AuthError.emailExists
+        } else if httpResponse.statusCode == 429 {
+            throw AuthError.rateLimited
+        } else {
+            let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AuthError.serverError(httpResponse.statusCode, errorMsg)
+        }
+    }
+    
+    func login(email: String, password: String) async throws -> AuthOut {
+        guard let url = URL(string: "\(baseURL)/auth/local/login") else {
+            throw AuthError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body = LocalLoginRequest(email: email, password: password)
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse
+        }
+        
+        if httpResponse.statusCode == 200 {
+            let authResponse = try JSONDecoder().decode(AuthOut.self, from: data)
+            storeCredentials(jwt: authResponse.jwt, userID: authResponse.user_id)
+            return authResponse
+        } else if httpResponse.statusCode == 401 {
+            throw AuthError.invalidCredentials
+        } else if httpResponse.statusCode == 403 {
+            throw AuthError.userBanned
+        } else if httpResponse.statusCode == 429 {
+            throw AuthError.rateLimited
+        } else {
+            let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AuthError.serverError(httpResponse.statusCode, errorMsg)
+        }
+    }
+    
     // MARK: - Helper to add Authorization header to requests
     
     func addAuthHeader(to request: inout URLRequest) {
@@ -305,6 +388,9 @@ enum AuthError: LocalizedError {
     case validationError
     case provisioningFailed
     case tenantNotReady
+    case emailExists
+    case invalidCredentials
+    case rateLimited
     case serverError(Int, String)
     
     var errorDescription: String? {
@@ -325,6 +411,12 @@ enum AuthError: LocalizedError {
             return "Failed to provision your Anki environment"
         case .tenantNotReady:
             return "Anki environment is not ready yet. Please try again."
+        case .emailExists:
+            return "Email already in use"
+        case .invalidCredentials:
+            return "Email or password is incorrect"
+        case .rateLimited:
+            return "Too many requests. Please try again later."
         case .serverError(let code, let message):
             return "Server error (\(code)): \(message)"
         }
