@@ -13,6 +13,16 @@ import SwiftUI
 #if os(iOS)
 import UIKit
 #endif
+import os.log
+
+// Shared logging function for AuthService
+private func appLog(_ message: String, category: String = "auth") {
+    let logger = Logger(subsystem: "anki.voice", category: category)
+    logger.info("\(message)")
+    #if DEBUG
+    print("[\(category)] \(message)")
+    #endif
+}
 
 // MARK: - Authentication Models
 
@@ -212,12 +222,17 @@ class AuthService: NSObject, ObservableObject {
     
     func syncAnki() async throws -> SyncAnkiResponse {
         guard let jwt = getJWT() else {
+            appLog("❌ syncAnki: Not authenticated - no JWT", category: "auth")
             throw AuthError.notAuthenticated
         }
         
         guard let url = URL(string: "\(baseURL)/anki/sync") else {
+            appLog("❌ syncAnki: Invalid URL: \(baseURL)/anki/sync", category: "auth")
             throw AuthError.invalidURL
         }
+        
+        appLog("🔄 syncAnki: Starting sync request to \(url.absoluteString)", category: "auth")
+        appLog("   JWT preview: \(String(jwt.prefix(20)))... (length: \(jwt.count))", category: "auth")
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -227,17 +242,38 @@ class AuthService: NSObject, ObservableObject {
         let body: [String: String] = [:]
         request.httpBody = try JSONEncoder().encode(body)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthError.invalidResponse
-        }
-        
-        if httpResponse.statusCode == 200 {
-            return try JSONDecoder().decode(SyncAnkiResponse.self, from: data)
-        } else {
-            let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw AuthError.serverError(httpResponse.statusCode, errorMsg)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                appLog("❌ syncAnki: Invalid response type", category: "auth")
+                throw AuthError.invalidResponse
+            }
+            
+            let statusCode = httpResponse.statusCode
+            let responseBody = String(data: data, encoding: .utf8) ?? "<non-UTF8 data>"
+            
+            appLog("📡 syncAnki: Response status: \(statusCode)", category: "auth")
+            appLog("   Response headers: \(httpResponse.allHeaderFields)", category: "auth")
+            appLog("   Response body: \(responseBody)", category: "auth")
+            
+            if statusCode == 200 {
+                let syncResponse = try JSONDecoder().decode(SyncAnkiResponse.self, from: data)
+                appLog("✅ syncAnki: Success - \(syncResponse.status)", category: "auth")
+                return syncResponse
+            } else {
+                appLog("❌ syncAnki: Server error \(statusCode): \(responseBody)", category: "auth")
+                throw AuthError.serverError(statusCode, responseBody)
+            }
+        } catch let urlError as URLError {
+            appLog("❌ syncAnki: Network error - \(urlError.localizedDescription)", category: "auth")
+            appLog("   Error code: \(urlError.code.rawValue)", category: "auth")
+            appLog("   Error domain: \(urlError.localizedDescription)", category: "auth")
+            throw urlError
+        } catch {
+            appLog("❌ syncAnki: Unexpected error - \(error.localizedDescription)", category: "auth")
+            appLog("   Error type: \(type(of: error))", category: "auth")
+            throw error
         }
     }
     

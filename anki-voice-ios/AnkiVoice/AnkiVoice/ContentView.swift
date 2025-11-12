@@ -1830,11 +1830,35 @@ struct ContentView: View {
             } else {
                 await tts.speakAndWait("Sync may have failed.")
             }
+        } catch let authError as AuthError {
+            let errorDetails: String
+            switch authError {
+            case .serverError(let code, let message):
+                errorDetails = "Server error \(code): \(message)"
+                appLog("❌ [SYNC] Server error \(code): \(message)", category: "sync")
+            case .notAuthenticated:
+                errorDetails = "Not authenticated. Please sign in."
+                appLog("❌ [SYNC] Not authenticated", category: "sync")
+            case .invalidURL:
+                errorDetails = "Invalid API URL"
+                appLog("❌ [SYNC] Invalid URL", category: "sync")
+            case .invalidResponse:
+                errorDetails = "Invalid response from server"
+                appLog("❌ [SYNC] Invalid response", category: "sync")
+            default:
+                errorDetails = authError.localizedDescription
+                appLog("❌ [SYNC] Auth error: \(authError.localizedDescription)", category: "sync")
+            }
+            await tts.speakAndWait("Cannot sync. \(errorDetails)")
+        } catch let urlError as URLError {
+            let errorDetails = "Network error: \(urlError.localizedDescription) (code: \(urlError.code.rawValue))"
+            appLog("❌ [SYNC] Network error: \(urlError.localizedDescription) (code: \(urlError.code.rawValue))", category: "sync")
+            await tts.speakAndWait("Cannot sync. \(errorDetails)")
         } catch {
-            #if DEBUG
-            print("[SYNC] Error: \(error)")
-            #endif
-            await tts.speakAndWait("Cannot sync. \(error.localizedDescription)")
+            let errorDetails = "\(error.localizedDescription)"
+            appLog("❌ [SYNC] Unexpected error: \(error) - \(error.localizedDescription)", category: "sync")
+            appLog("   Error type: \(type(of: error))", category: "sync")
+            await tts.speakAndWait("Cannot sync. \(errorDetails)")
         }
     }
     
