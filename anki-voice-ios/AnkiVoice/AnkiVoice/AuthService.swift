@@ -13,16 +13,6 @@ import SwiftUI
 #if os(iOS)
 import UIKit
 #endif
-import os.log
-
-// Shared logging function for AuthService
-private func appLog(_ message: String, category: String = "auth") {
-    let logger = Logger(subsystem: "anki.voice", category: category)
-    logger.info("\(message)")
-    #if DEBUG
-    print("[\(category)] \(message)")
-    #endif
-}
 
 // MARK: - Authentication Models
 
@@ -95,9 +85,11 @@ class AuthService: NSObject, ObservableObject {
            let userID = KeychainHelper.get(key: userIDKey, service: keychainService) {
             self.currentUserID = userID
             self.isAuthenticated = true
-            appLog("Loaded stored credentials for user: \(userID)", category: "auth")
+            appLog("Loaded stored credentials for user: \(userID), JWT present: \(!jwt.isEmpty)", category: "auth")
         } else {
-            appLog("No stored credentials found", category: "auth")
+            let hasJWT = KeychainHelper.get(key: jwtKey, service: keychainService) != nil
+            let hasUserID = KeychainHelper.get(key: userIDKey, service: keychainService) != nil
+            appLog("No stored credentials found (hasJWT: \(hasJWT), hasUserID: \(hasUserID))", category: "auth")
         }
     }
     
@@ -107,7 +99,13 @@ class AuthService: NSObject, ObservableObject {
     }
     
     func getJWT() -> String? {
-        return KeychainHelper.get(key: jwtKey, service: keychainService)
+        let jwt = KeychainHelper.get(key: jwtKey, service: keychainService)
+        #if DEBUG
+        if jwt == nil {
+            appLog("getJWT: JWT not found in keychain", category: "auth")
+        }
+        #endif
+        return jwt
     }
     
     private func storeCredentials(jwt: String, userID: String) {
@@ -183,6 +181,7 @@ class AuthService: NSObject, ObservableObject {
     
     func linkAnkiWeb(email: String, password: String) async throws -> LinkAnkiResponse {
         guard let jwt = getJWT() else {
+            appLog("linkAnkiWeb: JWT not found in keychain (isAuthenticated=\(isAuthenticated))", category: "auth")
             throw AuthError.notAuthenticated
         }
         
@@ -207,6 +206,9 @@ class AuthService: NSObject, ObservableObject {
         if httpResponse.statusCode == 200 {
             return try JSONDecoder().decode(LinkAnkiResponse.self, from: data)
         } else if httpResponse.statusCode == 401 {
+            let errorMsg = String(data: data, encoding: .utf8) ?? "Unauthorized"
+            appLog("linkAnkiWeb: API returned 401 Unauthorized. Response: \(errorMsg)", category: "auth")
+            appLog("linkAnkiWeb: JWT length: \(jwt.count), first 20 chars: \(String(jwt.prefix(20)))", category: "auth")
             throw AuthError.notAuthenticated
         } else if httpResponse.statusCode == 422 {
             throw AuthError.validationError
@@ -216,6 +218,7 @@ class AuthService: NSObject, ObservableObject {
             throw AuthError.tenantNotReady
         } else {
             let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
+            appLog("linkAnkiWeb: API error \(httpResponse.statusCode): \(errorMsg)", category: "auth")
             throw AuthError.serverError(httpResponse.statusCode, errorMsg)
         }
     }
@@ -438,7 +441,7 @@ extension AuthService: ASAuthorizationControllerPresentationContextProviding {
 
 // MARK: - Auth Errors
 
-enum AuthError: LocalizedError {
+enum AuthError: LocalizedError, Equatable {
     case invalidURL
     case invalidResponse
     case notAuthenticated

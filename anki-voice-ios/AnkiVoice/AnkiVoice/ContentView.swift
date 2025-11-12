@@ -1865,8 +1865,19 @@ struct ContentView: View {
     func linkAnkiWeb() async {
         guard authService.isAuthenticated else {
             await tts.speakAndWait("Please sign in first.")
-                return
-            }
+            return
+        }
+        
+        // Reload credentials to ensure JWT is available
+        authService.reloadCredentials()
+        
+        // Verify JWT is actually available before proceeding
+        guard authService.getJWT() != nil else {
+            await tts.speakAndWait("Authentication token not found. Please sign in again.")
+            // Reset auth state if JWT is missing
+            authService.logout()
+            return
+        }
             
         guard !ankiEmail.isEmpty && !ankiPassword.isEmpty else {
             await tts.speakAndWait("Please enter both email and password.")
@@ -1892,9 +1903,18 @@ struct ContentView: View {
         } catch {
             #if DEBUG
             print("[LINK_ANKI] Error: \(error)")
+            if let authError = error as? AuthError {
+                print("[LINK_ANKI] AuthError: \(authError)")
+            }
             #endif
             let errorMsg = error.localizedDescription
-            await tts.speakAndWait("Failed to link AnkiWeb account. \(errorMsg)")
+            // If JWT is invalid/expired, suggest signing in again
+            if let authError = error as? AuthError, authError == .notAuthenticated {
+                await tts.speakAndWait("Your session has expired. Please sign in again, then try linking your AnkiWeb account.")
+                authService.logout()
+            } else {
+                await tts.speakAndWait("Failed to link AnkiWeb account. \(errorMsg)")
+            }
         }
     }
     
