@@ -1968,8 +1968,8 @@ struct ContentView: View {
                     }
                 } catch {
                     #if DEBUG
-                    print("JSON decode failed: \(error)")
-                    print("Response data: \(String(data: data, encoding: .utf8) ?? "<non-utf8>")")
+                    print("[CURRENT_CARD] JSON decode error: \(error)")
+                    print("[CURRENT_CARD] Raw response data: \(String(data: data, encoding: .utf8)?.prefix(500) ?? "<non-utf8>")")
                     #endif
                 }
             } catch {
