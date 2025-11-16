@@ -2481,6 +2481,35 @@ Language is determined by the `lang` attribute in README divs:
 
 ---
 
-**Last Updated**: 2025-01-27
+## Recent Bug Fixes and Improvements
+
+### iOS App Debug Logging (November 2024)
+
+**Problem**: When the app failed to retrieve cards, there was insufficient logging to diagnose the issue. The app would show "Open Anki on your Mac and start a review" without providing details about what went wrong.
+
+**Fix**: Added comprehensive debug logging to `ContentView.swift`:
+- Logs HTTP status codes and response body (truncated to 1000 chars) for `/current` requests
+- Logs JSON decoding results with detailed field information
+- Logs card validation failures with specific reasons (missing fields, empty text, etc.)
+- All debug logs prefixed with `[CURRENT_CARD]` or `[START_REVIEW]` for easy filtering
+
+**Files Changed**:
+- `anki-voice-ios/AnkiVoice/AnkiVoice/ContentView.swift`: Added extensive debug logging in `fetchCurrentCard()` and `startReview()` functions
+
+**Note**: Debug logging is only enabled in DEBUG builds (wrapped in `#if DEBUG` blocks), so it won't affect production performance.
+
+### Gateway Response Parsing Fix (November 2024)
+
+**Problem**: The gateway was incorrectly parsing AnkiConnect responses, causing the app to receive "Backend returned: unknown" errors even when cards were available.
+
+**Root Cause**: AnkiConnect returns responses in the format `{"result": {...}, "error": null}`, but the gateway was checking `result.get("status")` on the top-level dict instead of extracting the nested `result` field first.
+
+**Fix**: The gateway was updated to correctly extract the `result` field from AnkiConnect responses before checking status. This fix is in the `anki-voice-deployer` repository.
+
+**Impact**: The iOS app now correctly receives card data when cards are available, eliminating false "no cards available" errors.
+
+---
+
+**Last Updated**: 2024-11-16
 
 **Remember**: This system preserves Anki's sophisticated scheduling algorithm while adding voice interaction. The core learning benefits remain unchanged - we're just changing the interface from visual/manual to voice-driven.
