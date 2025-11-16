@@ -38,7 +38,7 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  │  • Sign in with Apple integration                    │  │
 │  │  • JWT token management                               │  │
 │  │  • API authentication (Authorization headers)       │  │
-│  │  • AnkiWeb credential linking                        │  │
+│  │  • Sync credentials auto-generated on registration │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐  │
@@ -68,7 +68,7 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │              Backend API (Kubernetes)                        │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  POST /auth/apple - Apple Sign-In authentication     │  │
-│  │  POST /anki/link - Link AnkiWeb credentials          │  │
+│  │  GET /anki/sync-setup - View sync credentials (web) │  │
 │  │  POST /anki/sync - Trigger Anki sync                  │  │
 │  │  POST /secrets/decrypt - Decrypt credentials (sidecar)│ │
 │  └───────────────────────────────────────────────────────┘  │
@@ -119,7 +119,7 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  │  • undo_review() - Undoes last grade                  │  │
 │  │  • get_deck_names() - Gets all deck names              │  │
 │  │  • gui_deck_review() - Switches to a deck             │  │
-│  │  • sync() - Synchronizes with AnkiWeb                  │  │
+│  │  • sync() - Synchronizes with self-hosted server      │  │
 │  │  • suspend_cards() - Suspends cards                    │  │
 │  │  • retrieve_media_file() - Reads from media folder    │  │
 │  └───────────────────────────────────────────────────────┘  │
@@ -181,10 +181,10 @@ Traditional Anki review requires visual attention and manual clicking. This syst
    - App stores JWT and user_id in iOS Keychain
    - App shows "Signed in" status
 
-3. **User links AnkiWeb account**
-   - App shows "Link AnkiWeb Account" button
-   - User taps button, enters AnkiWeb email and password
-   - App calls `POST https://api.grantcurell.com/anki/link` with credentials
+3. **Sync credentials are auto-generated**
+   - When user registers/logs in, sync credentials are automatically created
+   - User can access `https://api.grantcurell.com/anki/sync-setup` to view credentials
+   - Credentials are used to configure Anki Desktop to sync with self-hosted server
    - Backend encrypts credentials (libsodium sealed box)
    - Backend creates tenant in Kubernetes (namespace, PVC, Deployment, etc.)
    - Backend stores encrypted credentials in database
@@ -567,7 +567,7 @@ The app now supports two modes:
    - User signs in with Apple ID
    - App uses production API: `https://api.grantcurell.com`
    - All requests include JWT token in Authorization header
-   - User links AnkiWeb account for cloud-based Anki access
+   - Sync credentials are auto-generated for self-hosted sync server
 
 2. **Development Mode (Not Authenticated)**:
    - App uses local dev server URL (configurable in UI)
@@ -614,9 +614,9 @@ ifconfig | grep "inet " | grep -v 127.0.0.1
 1. Tap the "Register" button in the top-right corner
 2. Sign in with your Apple ID
 3. App will automatically store your JWT token
-4. Tap "Link AnkiWeb Account" button
-5. Enter your AnkiWeb email and password
-6. App will link your account and provision your cloud Anki environment
+4. Sync credentials are automatically generated when you register/login
+5. Access `https://api.grantcurell.com/anki/sync-setup` to view your credentials
+6. Configure Anki Desktop to use the self-hosted sync server
 7. Optionally tap "Sync" to perform initial sync
 8. Tap "Start Review" to begin
 
@@ -1110,7 +1110,7 @@ curl -X POST "http://127.0.0.1:8000/switch-deck?name=Spanish%201"
 
 #### POST /sync
 
-**Purpose**: Synchronize Anki collection with AnkiWeb.
+**Purpose**: Synchronize Anki collection with self-hosted sync server.
 
 **Request**: No parameters needed.
 
@@ -1137,7 +1137,7 @@ curl -X POST http://127.0.0.1:8000/sync
 **Implementation Details**:
 - Calls `sync()` which uses AnkiConnect's `sync` action
 - Uses a 120-second timeout (sync can take a while for large collections)
-- Synchronizes the local Anki collection with AnkiWeb
+- Synchronizes the local Anki collection with self-hosted sync server
 
 **Timeout**: 120 seconds (2 minutes)
 
@@ -1199,7 +1199,7 @@ AnkiConnect is a separate add-on that must be installed in Anki. The server uses
 - `guiUndoReview` - Undoes the last review action
 - `deckNames` - Gets list of all deck names
 - `guiDeckReview` - Opens reviewer for a specific deck
-- `sync` - Synchronizes collection with AnkiWeb
+- `sync` - Synchronizes collection with self-hosted sync server
 - `suspend` - Suspends cards (they won't appear in reviews)
 - `cardsInfo` - Gets card information including deck name
 - `notesInfo` - Gets note information including tags
@@ -1232,7 +1232,7 @@ The iOS app now includes a complete authentication system using Sign in with App
 - Sign in with Apple integration using `ASAuthorizationController`
 - JWT token storage and retrieval from iOS Keychain
 - Automatic Authorization header injection for all API requests
-- AnkiWeb credential linking
+- Sync credentials auto-generated on registration/login
 - Anki sync triggering
 
 **Key Methods**:
@@ -1243,8 +1243,7 @@ func signInWithApple()
 // Register with backend API
 func registerWithApple(identityToken: String) async throws -> AppleAuthResponse
 
-// Link AnkiWeb credentials
-func linkAnkiWeb(email: String, password: String) async throws -> LinkAnkiResponse
+// Sync credentials are auto-generated - no linking required
 
 // Trigger Anki sync
 func syncAnki() async throws -> SyncAnkiResponse
@@ -1296,7 +1295,7 @@ static func delete(key: String, service: String)
 - Displays error messages if authentication fails
 
 **Post-Registration**:
-- "Link AnkiWeb Account" button appears after successful registration
+- Sync credentials are automatically generated after successful registration
 - Form with email and password fields
 - Validates input before submission
 - Shows success/error feedback
@@ -1901,7 +1900,7 @@ curl -X POST http://127.0.0.1:8000/submit-grade \
 - JWT token is missing or expired
 - Solution: Tap "Register" to sign in again, or check if token expired (7-day expiration)
 
-**"Failed to link AnkiWeb account"**:
+**Sync credentials**:
 - Check error message for specific issue:
   - "Invalid email or password format" - Verify credentials are correct
   - "Failed to provision your Anki environment" - Backend provisioning failed, check backend logs
@@ -2150,7 +2149,7 @@ pip install -r requirements.txt
 - Backend API verifies JWT signature using RS256 public key
 - Invalid or expired tokens result in 401 Unauthorized responses
 
-**AnkiWeb Credentials**:
+**Sync Credentials** (Auto-Generated):
 - Credentials are encrypted using libsodium sealed box encryption
 - Only ciphertext is stored in database
 - Plaintext credentials are never logged or stored insecurely
@@ -2258,7 +2257,7 @@ pip install -r requirements.txt
 - [ ] iOS app connects to server (or authenticates with production API)
 - [ ] User can register with Sign in with Apple
 - [ ] JWT token is stored in Keychain
-- [ ] User can link AnkiWeb account
+- [ ] Sync credentials are auto-generated on registration
 - [ ] All API calls include Authorization header
 - [ ] Speech recognition captures audio
 - [ ] TTS speaks clearly
@@ -2446,12 +2445,10 @@ Language is determined by the `lang` attribute in README divs:
 - "Signed in" (green text) - User is authenticated
 - "Not signed in" (orange text) - User needs to register
 
-**Link AnkiWeb Section**:
-- "Link AnkiWeb Account" button (appears after authentication)
-- Form with email and password fields
-- Cancel and Link buttons
-- Loading indicator during linking process
-- Success/error feedback via TTS
+**Sync Credentials**:
+- Automatically generated when user registers/logs in
+- User can view credentials at `https://api.grantcurell.com/anki/sync-setup`
+- No UI needed in app - credentials are managed server-side
 
 ### Home Screen (Idle State)
 
@@ -2460,7 +2457,7 @@ Language is determined by the `lang` attribute in README divs:
 - **Open Settings Button**: Opens iPhone Settings (shown if permissions denied)
 - **Deck Selection Dropdown**: Select which deck to review (loads via `/decks` endpoint)
 - **Start Review Button**: Begins review session (changes to "Return to deck selection" during review)
-- **Sync Button**: Synchronizes Anki with AnkiWeb (only shown when idle)
+- **Sync Button**: Synchronizes Anki with self-hosted sync server (only shown when idle)
 
 ### During Review
 
