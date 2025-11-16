@@ -1062,16 +1062,15 @@ struct ContentView: View {
                         Text("Loading decks...")
                             .font(.caption)
                                 .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Button("Load Decks") {
-                            Task {
-                                await fetchDecks()
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundColor(.blue)
                     }
+                } else {
+                    Button("Load Decks") {
+                        Task {
+                            await fetchDecks()
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
                 }
                 
                 // Show server health status (always visible when not idle, or when idle if set)
@@ -1223,8 +1222,8 @@ struct ContentView: View {
                             }
                             .frame(maxHeight: 150) // Limit transcript height too
                         }
-        }
-        .padding()
+                    }
+                    .padding()
                     .background(Color(.secondarySystemBackground))
                     .cornerRadius(12)
                 }
@@ -1276,8 +1275,9 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-            }.padding()
+            }
         }
+        .padding()
         .sheet(isPresented: $showAuthSheet) {
             AuthSheet(authService: authService)
         }
@@ -1390,9 +1390,6 @@ struct ContentView: View {
             applyKeepAwake()
         }
         .onChange(of: state) { _, _ in
-            applyKeepAwake()
-        }
-        .onAppear {
             applyKeepAwake()
         }
         .onDisappear {
@@ -3591,4 +3588,3 @@ struct ContentView: View {
         try? await Task.sleep(nanoseconds: 150_000_000)
     }
 }
-
