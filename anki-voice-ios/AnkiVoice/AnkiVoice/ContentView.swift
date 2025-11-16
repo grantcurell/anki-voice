@@ -1640,7 +1640,10 @@ struct ContentView: View {
         defer { isLoadingDecks = false }
         
         do {
-            let (data, resp) = try await URLSession.shared.data(from: url)
+            var req = URLRequest(url: url)
+            authService.addAuthHeader(to: &req)
+            
+            let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
                 return
             }
