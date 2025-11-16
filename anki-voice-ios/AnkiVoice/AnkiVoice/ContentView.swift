@@ -1953,17 +1953,25 @@ struct ContentView: View {
                     do {
                     let decoded = try JSONDecoder().decode(CurrentCard.self, from: data)
                     #if DEBUG
-                    print("Decoded card - status: '\(decoded.status)', cardId: \(decoded.cardId?.description ?? "nil"), front_text: \(decoded.front_text?.prefix(50) ?? "nil"), back_text: \(decoded.back_text?.prefix(50) ?? "nil")")
+                    print("[CURRENT_CARD] Successfully decoded card")
+                    print("[CURRENT_CARD]   status: \(decoded.status)")
+                    print("[CURRENT_CARD]   cardId: \(decoded.cardId?.description ?? "nil")")
+                    print("[CURRENT_CARD]   front_text: \(decoded.front_text?.prefix(50) ?? "nil")")
+                    print("[CURRENT_CARD]   back_text: \(decoded.back_text?.prefix(50) ?? "nil")")
+                    print("[CURRENT_CARD]   front_text present: \(decoded.front_text != nil)")
+                    print("[CURRENT_CARD]   back_text present: \(decoded.back_text != nil)")
+                    print("[CURRENT_CARD]   front_text empty: \(decoded.front_text?.isEmpty ?? true)")
+                    print("[CURRENT_CARD]   back_text empty: \(decoded.back_text?.isEmpty ?? true)")
                     #endif
                     if decoded.status == "ok" {
                         card = decoded
                         #if DEBUG
-                        print("Successfully fetched card: \(decoded.cardId ?? 0)")
+                        print("[CURRENT_CARD] ✅ Card status is 'ok', using it")
                         #endif
                         break
                     } else {
                         #if DEBUG
-                        print("Card status is not 'ok': '\(decoded.status)'")
+                        print("[CURRENT_CARD] ⚠️  Card status is not 'ok': '\(decoded.status)'")
                         #endif
                     }
                 } catch {
