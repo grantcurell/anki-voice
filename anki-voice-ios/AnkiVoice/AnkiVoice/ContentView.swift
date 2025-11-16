@@ -1016,8 +1016,9 @@ struct ContentView: View {
                 )
                 
                 // Show server URL input only when idle and not authenticated (for local dev)
+                #if DEBUG
                 if case .idle = state, !authService.isAuthenticated {
-                    TextField("Server Base URL", text: $server)
+                    TextField("Server Base URL (local dev)", text: $server)
                         .textFieldStyle(.roundedBorder)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
@@ -1025,39 +1026,41 @@ struct ContentView: View {
                     
                     // Show validation hint if URL is invalid
                     if validatedServerURL() == nil && !server.isEmpty {
-                        #if DEBUG
                         Text("HTTP allowed only for *.\(tailnetSuffix)")
                             .font(.caption2)
                             .foregroundColor(.orange)
-                        #else
-                        Text("Release builds require HTTPS")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                        #endif
                     }
                     
-                    // Deck selection dropdown
-                    if !availableDecks.isEmpty {
-                        Picker("Select Deck", selection: $selectedDeck) {
-                            Text("Select a deck...").tag("")
-                            ForEach(availableDecks, id: \.self) { deck in
-                                Text(deck).tag(deck)
+                    // Show port forwarding hint
+                    Text("Note: Run 'kubectl port-forward -n gateway --address 0.0.0.0 svc/api-gateway 8000:80' to enable local dev")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                        .padding(.top, 2)
+                }
+                #endif
+                
+                // Deck selection dropdown
+                if !availableDecks.isEmpty {
+                    Picker("Select Deck", selection: $selectedDeck) {
+                        Text("Select a deck...").tag("")
+                        ForEach(availableDecks, id: \.self) { deck in
+                            Text(deck).tag(deck)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: selectedDeck) { oldValue, newValue in
+                        if !newValue.isEmpty && newValue != oldValue {
+                            Task {
+                                await switchDeck(to: newValue)
                             }
                         }
-                        .pickerStyle(.menu)
-                        .onChange(of: selectedDeck) { oldValue, newValue in
-                            if !newValue.isEmpty && newValue != oldValue {
-                                Task {
-                                    await switchDeck(to: newValue)
-                                }
-                            }
-                        }
-                    } else if isLoadingDecks {
-                        HStack {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Loading decks...")
-                                .font(.caption)
+                    }
+                } else if isLoadingDecks {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Loading decks...")
+                            .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     } else {
@@ -1437,7 +1440,11 @@ struct ContentView: View {
         if let e = error as? URLError {
             switch e.code {
             case .cannotConnectToHost:   // -1004 / ECONNREFUSED
-                return "Could not connect. The server isn't running on your Mac (port 8000 refused). Start it with: uvicorn app dot main colon app --host 0 dot 0 dot 0 dot 0 --port 8000"
+                #if DEBUG
+                return "Could not connect. For local dev, run: kubectl port-forward -n gateway --address 0.0.0.0 svc/api-gateway 8000:80"
+                #else
+                return "Could not connect to server. Please check your network connection."
+                #endif
             case .timedOut:
                 return "Server timed out. Mac may be asleep or network is flaky."
             default:
@@ -2838,17 +2845,22 @@ struct ContentView: View {
         let baseURL = validatedBaseURL() ?? server
         #if DEBUG
         print("Failed to reach grader at \(baseURL)/grade-with-explanation after retries")
-        print("Make sure:")
-        print("1. FastAPI server is running on your Mac")
-        print("2. Server URL uses Tailscale MagicDNS (e.g., http://<device>.\(tailnetSuffix):8000)")
-        print("3. Server is bound to 0.0.0.0 (not 127.0.0.1)")
-        print("4. iPhone and Mac both have Tailscale running")
-        print("5. MagicDNS is enabled in Tailscale admin console")
+        if authService.isAuthenticated {
+            print("Using production API: \(productionAPIURL)")
+        } else {
+            print("For local dev:")
+            print("1. Run: kubectl port-forward -n gateway --address 0.0.0.0 svc/api-gateway 8000:80")
+            print("2. Server URL uses Tailscale MagicDNS (e.g., http://<device>.\(tailnetSuffix):8000)")
+        }
         #endif
         
+        #if DEBUG
         let errorMsg = baseURL.contains("127.0.0.1") || baseURL.contains("localhost") ?
-            "Server URL is localhost. Set it to your Mac's IP address like http colon slash slash 192 dot 168 dot 1 dot 50 colon 8000" :
-            "I couldn't reach the grader. Check that the server is running and the URL is correct. You can say a grade directly instead."
+            "Server URL is localhost. For local dev, run: kubectl port-forward -n gateway --address 0.0.0.0 svc/api-gateway 8000:80" :
+            "I couldn't reach the grader. For local dev, ensure port forwarding is active. You can say a grade directly instead."
+        #else
+        let errorMsg = "I couldn't reach the grader. Please check your network connection. You can say a grade directly instead."
+        #endif
         speakErrorIfAllowed(errorMsg)
         
         // Always transition to a valid state - never leave stuck in awaitingAnswer
