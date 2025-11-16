@@ -13,7 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync, gui_current_card
 from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
@@ -174,15 +174,21 @@ class DeleteNoteIn(BaseModel):
 @app.get("/current")
 async def current():
     try:
-        async with httpx.AsyncClient(timeout=2.0) as x:
-            r = await x.get(f"{ADDON_BASE}/current")
-        data = r.json()
+        # Use headless backend's guiCurrentCard instead of bridge add-on
+        data = await gui_current_card()
+        
+        if isinstance(data, dict) and data.get("error"):
+            return {
+                "status": "error",
+                "message": f"Anki error: {data['error']}",
+                "details": "Make sure backend is running and a card is available"
+            }
         
         if data.get("status") != "ok":
             return {
                 "status": "error",
-                "message": f"Anki add-on returned: {data.get('status', 'unknown')}",
-                "details": "Make sure Anki is open with a card ready for review"
+                "message": f"Backend returned: {data.get('status', 'unknown')}",
+                "details": "No card available for review"
             }
         
         # Extract text from README div if present, otherwise use full content
@@ -213,18 +219,6 @@ async def current():
         
         return data
         
-    except httpx.ConnectError:
-        return {
-            "status": "error",
-            "message": "Cannot connect to Anki add-on",
-            "details": "Make sure Anki is running and the add-on is installed"
-        }
-    except httpx.TimeoutException:
-        return {
-            "status": "error", 
-            "message": "Anki add-on timeout",
-            "details": "Anki may be busy or not responding"
-        }
     except Exception as e:
         return {
             "status": "error",

@@ -965,10 +965,7 @@ struct ContentView: View {
     @State private var selectedDeck: String = ""  // Currently selected deck
     @State private var isLoadingDecks: Bool = false  // Loading state for decks
     @State private var isSyncing: Bool = false  // Loading state for sync
-    @State private var showLinkAnkiForm: Bool = false  // Show Link AnkiWeb form
-    @State private var ankiEmail: String = ""  // AnkiWeb email
-    @State private var ankiPassword: String = ""  // AnkiWeb password
-    @State private var isLinkingAnki: Bool = false  // Loading state for linking
+    // AnkiWeb linking removed - using custom sync server with auto-generated credentials
     
     #if os(iOS)
     private let director = AudioDirector()
@@ -1004,16 +1001,6 @@ struct ContentView: View {
                 
                 // Show authentication status
                 AuthStatusView(authService: authService)
-                
-                // Link AnkiWeb form
-                LinkAnkiWebFormView(
-                    authService: authService,
-                    showLinkAnkiForm: $showLinkAnkiForm,
-                    ankiEmail: $ankiEmail,
-                    ankiPassword: $ankiPassword,
-                    isLinkingAnki: $isLinkingAnki,
-                    linkAction: linkAnkiWeb
-                )
                 
                 // Show server URL input only when idle and not authenticated (for local dev)
                 #if DEBUG
@@ -1869,61 +1856,7 @@ struct ContentView: View {
         }
     }
     
-    func linkAnkiWeb() async {
-        guard authService.isAuthenticated else {
-            await tts.speakAndWait("Please sign in first.")
-            return
-        }
-        
-        // Reload credentials to ensure JWT is available
-        authService.reloadCredentials()
-        
-        // Verify JWT is actually available before proceeding
-        guard authService.getJWT() != nil else {
-            await tts.speakAndWait("Authentication token not found. Please sign in again.")
-            // Reset auth state if JWT is missing
-            authService.logout()
-            return
-        }
-            
-        guard !ankiEmail.isEmpty && !ankiPassword.isEmpty else {
-            await tts.speakAndWait("Please enter both email and password.")
-            return
-        }
-        
-        isLinkingAnki = true
-        defer { isLinkingAnki = false }
-        
-        do {
-            let response = try await authService.linkAnkiWeb(email: ankiEmail, password: ankiPassword)
-            if response.status == "ok" {
-                showLinkAnkiForm = false
-                ankiEmail = ""
-                ankiPassword = ""
-                await tts.speakAndWait("AnkiWeb account linked successfully.")
-                
-                // Optionally trigger initial sync
-                Task {
-                    await syncAnki()
-                }
-            }
-        } catch {
-            #if DEBUG
-            print("[LINK_ANKI] Error: \(error)")
-            if let authError = error as? AuthError {
-                print("[LINK_ANKI] AuthError: \(authError)")
-            }
-            #endif
-            let errorMsg = error.localizedDescription
-            // If JWT is invalid/expired, suggest signing in again
-            if let authError = error as? AuthError, authError == .notAuthenticated {
-                await tts.speakAndWait("Your session has expired. Please sign in again, then try linking your AnkiWeb account.")
-                authService.logout()
-            } else {
-                await tts.speakAndWait("Failed to link AnkiWeb account. \(errorMsg)")
-            }
-        }
-    }
+    // AnkiWeb linking removed - sync credentials are auto-generated on registration/login
     
     @MainActor
     func returnToDeckSelection() async {

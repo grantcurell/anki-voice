@@ -141,6 +141,13 @@ async def gui_deck_review(deck_name: str):
     except Exception as e:
         raise Exception(f"Failed to open deck reviewer: {str(e)}")
 
+async def gui_current_card():
+    """Get current card from headless backend (replaces bridge add-on)"""
+    try:
+        return await ac_call("guiCurrentCard")
+    except Exception as e:
+        return {"error": str(e)}
+
 async def sync():
     """Synchronize the local Anki collection with AnkiWeb"""
     try:
