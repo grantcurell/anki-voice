@@ -173,3 +173,27 @@ async def sync():
         raise Exception(f"AnkiConnect error: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         raise Exception(f"Failed to sync: {str(e)}")
+
+async def get_deck_stats(deck_name: str):
+    """Get statistics for a deck: new cards and review cards count"""
+    try:
+        # Find new cards in the deck
+        new_cards_result = await ac_call("findCards", {"query": f"deck:\"{deck_name}\" is:new"})
+        new_count = 0
+        if isinstance(new_cards_result, dict) and new_cards_result.get("error") is None:
+            new_cards = new_cards_result.get("result", [])
+            new_count = len(new_cards) if isinstance(new_cards, list) else 0
+        
+        # Find review cards (due cards) in the deck
+        review_cards_result = await ac_call("findCards", {"query": f"deck:\"{deck_name}\" is:due"})
+        review_count = 0
+        if isinstance(review_cards_result, dict) and review_cards_result.get("error") is None:
+            review_cards = review_cards_result.get("result", [])
+            review_count = len(review_cards) if isinstance(review_cards, list) else 0
+        
+        return {
+            "new": new_count,
+            "review": review_count
+        }
+    except Exception as e:
+        raise Exception(f"Failed to get deck stats: {str(e)}")

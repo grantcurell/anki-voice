@@ -13,7 +13,7 @@ import httpx
 from dotenv import load_dotenv
 from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
-from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync, gui_current_card
+from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync, gui_current_card, get_deck_stats
 from .openai_client import grade_with_gpt5_explanation, answer_followup
 
 # Load environment variables from .env file
@@ -337,6 +337,23 @@ async def switch_deck_endpoint(name: str):
     except Exception as e:
         log.error("Failed to switch deck: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=502, detail=f"Failed to switch deck: {str(e)}")
+
+@app.get("/deck-stats")
+async def get_deck_stats_endpoint(name: str):
+    """Get statistics for a deck: new cards and review cards count"""
+    try:
+        # Validate that the deck exists
+        decks = await get_deck_names()
+        if name not in decks:
+            raise HTTPException(status_code=404, detail=f"Deck not found: {name}")
+        
+        stats = await get_deck_stats(name)
+        return {"status": "ok", "deck": name, "new": stats["new"], "review": stats["review"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Failed to get deck stats: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=502, detail=f"Failed to get deck stats: {str(e)}")
 
 @app.post("/sync")
 async def sync_endpoint():

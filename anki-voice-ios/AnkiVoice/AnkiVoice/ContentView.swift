@@ -965,6 +965,9 @@ struct ContentView: View {
     @State private var selectedDeck: String = ""  // Currently selected deck
     @State private var isLoadingDecks: Bool = false  // Loading state for decks
     @State private var isSyncing: Bool = false  // Loading state for sync
+    @State private var deckNewCount: Int? = nil  // Number of new cards in selected deck
+    @State private var deckReviewCount: Int? = nil  // Number of review cards in selected deck
+    @State private var isLoadingDeckStats: Bool = false  // Loading state for deck stats
     // AnkiWeb linking removed - using custom sync server with auto-generated credentials
     
     #if os(iOS)
@@ -1038,8 +1041,12 @@ struct ContentView: View {
                         .onChange(of: selectedDeck) { oldValue, newValue in
                             if !newValue.isEmpty && newValue != oldValue {
                                 Task {
-                                    await switchDeck(to: newValue)
+                                    await fetchDeckStats(for: newValue)
                                 }
+                            } else if newValue.isEmpty {
+                                // Clear stats when no deck is selected
+                                deckNewCount = nil
+                                deckReviewCount = nil
                             }
                         }
                     } else if isLoadingDecks {
@@ -1058,6 +1065,41 @@ struct ContentView: View {
                         }
                         .font(.caption)
                         .foregroundColor(.blue)
+                }
+                
+                // Display deck stats when a deck is selected
+                if !selectedDeck.isEmpty {
+                    if isLoadingDeckStats {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Loading deck stats...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else if let newCount = deckNewCount, let reviewCount = deckReviewCount {
+                        VStack(spacing: 4) {
+                            HStack(spacing: 16) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("New Cards")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Text("\(newCount)")
+                                        .font(.headline)
+                                        .foregroundColor(.blue)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Review Cards")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Text("\(reviewCount)")
+                                        .font(.headline)
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
                 
                 // Show server health status (always visible when not idle, or when idle if set)
@@ -1653,6 +1695,49 @@ struct ContentView: View {
     }
     
     @MainActor
+    func fetchDeckStats(for deckName: String) async {
+        guard let base = validatedBaseURL(),
+              let encodedDeck = deckName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(base)/deck-stats?name=\(encodedDeck)") else {
+            return
+        }
+        
+        isLoadingDeckStats = true
+        defer { isLoadingDeckStats = false }
+        
+        do {
+            var req = URLRequest(url: url)
+            authService.addAuthHeader(to: &req)
+            
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                deckNewCount = nil
+                deckReviewCount = nil
+                return
+            }
+            
+            struct DeckStatsResponse: Decodable {
+                let status: String
+                let deck: String
+                let new: Int
+                let review: Int
+            }
+            
+            let decoded = try JSONDecoder().decode(DeckStatsResponse.self, from: data)
+            if decoded.status == "ok" {
+                await MainActor.run {
+                    deckNewCount = decoded.new
+                    deckReviewCount = decoded.review
+                }
+            }
+        } catch {
+            // Silently fail - stats will remain nil
+            deckNewCount = nil
+            deckReviewCount = nil
+        }
+    }
+    
+    @MainActor
     private func showBackNowAndPrepareToListen(_ cid: Int, _ front: String, _ back: String) {
         // Show the back immediately; this sets the UI to "Answer"+answer text at once.
         state = .awaitingAction(cardId: cid, front: front, back: back)
@@ -1900,6 +1985,31 @@ struct ContentView: View {
         #if os(iOS)
         await director.handle(.toTTS(stt))
         #endif
+        
+        // If a deck is selected, switch to it before starting review
+        if !selectedDeck.isEmpty {
+            guard let base = validatedBaseURL(),
+                  let encodedDeck = selectedDeck.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                  let url = URL(string: "\(base)/switch-deck?name=\(encodedDeck)") else {
+                await tts.speakAndWait("Invalid server URL.")
+                return
+            }
+            
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            authService.addAuthHeader(to: &req)
+            
+            do {
+                let (_, resp) = try await URLSession.shared.data(for: req)
+                guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                    await tts.speakAndWait("Couldn't switch decks.")
+                    return
+                }
+            } catch {
+                await tts.speakAndWait("Cannot reach Anki.")
+                return
+            }
+        }
         
         // Reset prompt flag for new card
         hasPromptedForAnswer = false
