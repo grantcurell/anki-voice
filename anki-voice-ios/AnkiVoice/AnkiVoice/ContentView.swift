@@ -1020,44 +1020,44 @@ struct ContentView: View {
                     
                     // Show port forwarding hint
                     Text("Note: Run 'kubectl port-forward -n gateway --address 0.0.0.0 svc/api-gateway 8000:80' to enable local dev")
-                        .font(.caption2)
+                            .font(.caption2)
                         .foregroundColor(.blue)
                         .padding(.top, 2)
-                }
-                #endif
-                
-                // Deck selection dropdown
-                if !availableDecks.isEmpty {
-                    Picker("Select Deck", selection: $selectedDeck) {
-                        Text("Select a deck...").tag("")
-                        ForEach(availableDecks, id: \.self) { deck in
-                            Text(deck).tag(deck)
-                        }
                     }
-                    .pickerStyle(.menu)
-                    .onChange(of: selectedDeck) { oldValue, newValue in
-                        if !newValue.isEmpty && newValue != oldValue {
-                            Task {
-                                await switchDeck(to: newValue)
+                #endif
+                    
+                    // Deck selection dropdown
+                    if !availableDecks.isEmpty {
+                        Picker("Select Deck", selection: $selectedDeck) {
+                            Text("Select a deck...").tag("")
+                            ForEach(availableDecks, id: \.self) { deck in
+                                Text(deck).tag(deck)
                             }
                         }
-                    }
-                } else if isLoadingDecks {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text("Loading decks...")
-                            .font(.caption)
-                                .foregroundColor(.secondary)
-                    }
-                } else {
-                    Button("Load Decks") {
-                        Task {
-                            await fetchDecks()
+                        .pickerStyle(.menu)
+                        .onChange(of: selectedDeck) { oldValue, newValue in
+                            if !newValue.isEmpty && newValue != oldValue {
+                                Task {
+                                    await switchDeck(to: newValue)
+                                }
+                            }
                         }
-                    }
-                    .font(.caption)
-                    .foregroundColor(.blue)
+                    } else if isLoadingDecks {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Loading decks...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        Button("Load Decks") {
+                            Task {
+                                await fetchDecks()
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
                 }
                 
                 // Show server health status (always visible when not idle, or when idle if set)
@@ -1209,8 +1209,8 @@ struct ContentView: View {
                             }
                             .frame(maxHeight: 150) // Limit transcript height too
                         }
-                    }
-                    .padding()
+        }
+        .padding()
                     .background(Color(.secondarySystemBackground))
                     .cornerRadius(12)
                 }
@@ -1262,7 +1262,7 @@ struct ContentView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-            }
+        }
         }
         .padding()
         .sheet(isPresented: $showAuthSheet) {
@@ -1935,21 +1935,22 @@ struct ContentView: View {
         // Test connectivity first and log the result
         var card: CurrentCard?
         for attempt in 0..<2 {
-            do {
-                var req = URLRequest(url: url)
-                authService.addAuthHeader(to: &req)
-                let (data, response) = try await session.data(for: req)
-                if let httpResponse = response as? HTTPURLResponse {
-                    #if DEBUG
-                    print("GET /current: HTTP \(httpResponse.statusCode)")
-                    let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
-                    print("Response body (first 500 chars): \(String(responseBody.prefix(500)))")
-                    if httpResponse.statusCode != 200 {
-                        print("ERROR: Non-200 status. Full body: \(responseBody)")
-                    }
-                    #endif
-                }
                 do {
+                    var req = URLRequest(url: url)
+                    authService.addAuthHeader(to: &req)
+                    let (data, response) = try await session.data(for: req)
+                    if let httpResponse = response as? HTTPURLResponse {
+                        #if DEBUG
+                        print("[CURRENT_CARD] GET /current: HTTP \(httpResponse.statusCode)")
+                        let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                        print("[CURRENT_CARD] Response body length: \(data.count) bytes")
+                        print("[CURRENT_CARD] Response body (first 1000 chars): \(String(responseBody.prefix(1000)))")
+                        if httpResponse.statusCode != 200 {
+                            print("[CURRENT_CARD] ERROR: Non-200 status. Full body: \(responseBody)")
+                        }
+                        #endif
+                    }
+                    do {
                     let decoded = try JSONDecoder().decode(CurrentCard.self, from: data)
                     #if DEBUG
                     print("Decoded card - status: '\(decoded.status)', cardId: \(decoded.cardId?.description ?? "nil"), front_text: \(decoded.front_text?.prefix(50) ?? "nil"), back_text: \(decoded.back_text?.prefix(50) ?? "nil")")
@@ -2026,7 +2027,16 @@ struct ContentView: View {
               let back = finalCard.back_text,
               let cid = finalCard.cardId else {
             #if DEBUG
-            print("[START_REVIEW] No valid card available. card=\(card?.status ?? "nil")")
+            print("[START_REVIEW] ❌ No valid card available")
+            print("[START_REVIEW]   card == nil: \(card == nil)")
+            if let c = card {
+                print("[START_REVIEW]   card.status: \(c.status)")
+                print("[START_REVIEW]   card.cardId: \(c.cardId?.description ?? "nil")")
+                print("[START_REVIEW]   card.front_text present: \(c.front_text != nil)")
+                print("[START_REVIEW]   card.front_text empty: \(c.front_text?.isEmpty ?? true)")
+                print("[START_REVIEW]   card.back_text present: \(c.back_text != nil)")
+                print("[START_REVIEW]   card.back_text empty: \(c.back_text?.isEmpty ?? true)")
+            }
             #endif
             
             // Distinguish between connection errors and no card available
@@ -2783,7 +2793,7 @@ struct ContentView: View {
         } else {
             print("For local dev:")
             print("1. Run: kubectl port-forward -n gateway --address 0.0.0.0 svc/api-gateway 8000:80")
-            print("2. Server URL uses Tailscale MagicDNS (e.g., http://<device>.\(tailnetSuffix):8000)")
+        print("2. Server URL uses Tailscale MagicDNS (e.g., http://<device>.\(tailnetSuffix):8000)")
         }
         #endif
         
