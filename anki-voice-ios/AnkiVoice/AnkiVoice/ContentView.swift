@@ -1067,38 +1067,43 @@ struct ContentView: View {
                         .foregroundColor(.blue)
                 }
                 
-                // Display deck stats when a deck is selected
+                // Display deck stats when a deck is selected (always visible, compact format)
                 if !selectedDeck.isEmpty {
-                    if isLoadingDeckStats {
-                        HStack {
+                    HStack(spacing: 12) {
+                        if isLoadingDeckStats {
                             ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Loading deck stats...")
-                                .font(.caption)
+                                .scaleEffect(0.7)
+                            Text("Loading...")
+                                .font(.caption2)
                                 .foregroundColor(.secondary)
-                        }
-                    } else if let newCount = deckNewCount, let reviewCount = deckReviewCount {
-                        VStack(spacing: 4) {
-                            HStack(spacing: 16) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("New Cards")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Text("\(newCount)")
-                                        .font(.headline)
-                                        .foregroundColor(.blue)
-                                }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Review Cards")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Text("\(reviewCount)")
-                                        .font(.headline)
-                                        .foregroundColor(.orange)
-                                }
+                        } else {
+                            // Always show both, even if 0
+                            HStack(spacing: 4) {
+                                Text("New:")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("\(deckNewCount ?? 0)")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.blue)
+                            }
+                            HStack(spacing: 4) {
+                                Text("Review:")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("\(deckReviewCount ?? 0)")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.orange)
                             }
                         }
-                        .padding(.vertical, 4)
+                    }
+                    .padding(.top, 2)
+                    .task(id: selectedDeck) {
+                        // Automatically fetch stats whenever selectedDeck changes
+                        if !selectedDeck.isEmpty {
+                            await fetchDeckStats(for: selectedDeck)
+                        }
                     }
                 }
                 
@@ -1317,6 +1322,10 @@ struct ContentView: View {
             // Fetch decks when app appears
             Task {
                 await fetchDecks()
+                // If a deck is already selected, fetch its stats
+                if !selectedDeck.isEmpty {
+                    await fetchDeckStats(for: selectedDeck)
+                }
             }
             
             // One-time migration: update old IPs to Tailscale MagicDNS hostname
@@ -1696,25 +1705,123 @@ struct ContentView: View {
     
     @MainActor
     func fetchDeckStats(for deckName: String) async {
-        guard let base = validatedBaseURL(),
-              let encodedDeck = deckName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "\(base)/deck-stats?name=\(encodedDeck)") else {
+        #if DEBUG
+        print("[DECK_STATS] ===== Starting fetchDeckStats for deck: '\(deckName)' =====")
+        #endif
+        
+        guard let base = validatedBaseURL() else {
+            #if DEBUG
+            print("[DECK_STATS] ❌ validatedBaseURL() returned nil")
+            print("[DECK_STATS] Current server value: '\(server)'")
+            #endif
             return
         }
         
+        #if DEBUG
+        print("[DECK_STATS] Base URL: \(base)")
+        #endif
+        
+        // Use URLComponents for proper URL construction
+        guard var components = URLComponents(string: base) else {
+            #if DEBUG
+            print("[DECK_STATS] ❌ Failed to create URLComponents from base: \(base)")
+            #endif
+            return
+        }
+        
+        // Determine endpoint path based on whether we're authenticated (production) or not (local dev)
+        let endpointPath = authService.isAuthenticated ? "/anki/deck-stats" : "/deck-stats"
+        components.path = endpointPath
+        components.queryItems = [URLQueryItem(name: "name", value: deckName)]
+        
+        guard let url = components.url else {
+            #if DEBUG
+            print("[DECK_STATS] ❌ Failed to create URL from components")
+            #endif
+            return
+        }
+        
+        #if DEBUG
+        print("[DECK_STATS] ✅ URL created: \(url.absoluteString)")
+        print("[DECK_STATS] Using endpoint path: \(endpointPath)")
+        print("[DECK_STATS] Deck name: '\(deckName)'")
+        print("[DECK_STATS] Is authenticated: \(authService.isAuthenticated)")
+        #endif
+        
         isLoadingDeckStats = true
-        defer { isLoadingDeckStats = false }
+        defer { 
+            isLoadingDeckStats = false
+            #if DEBUG
+            print("[DECK_STATS] ===== Finished fetchDeckStats =====")
+            #endif
+        }
         
         do {
             var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            
+            #if DEBUG
+            print("[DECK_STATS] Checking authentication...")
+            print("[DECK_STATS] isAuthenticated: \(authService.isAuthenticated)")
+            #endif
+            
             authService.addAuthHeader(to: &req)
             
+            #if DEBUG
+            print("[DECK_STATS] Request details:")
+            print("[DECK_STATS]   Method: \(req.httpMethod ?? "N/A")")
+            print("[DECK_STATS]   URL: \(req.url?.absoluteString ?? "N/A")")
+            print("[DECK_STATS]   All headers:")
+            for (key, value) in req.allHTTPHeaderFields ?? [:] {
+                if key.lowercased() == "authorization" {
+                    let preview = value.prefix(30) + "..."
+                    print("[DECK_STATS]     \(key): \(preview)")
+                } else {
+                    print("[DECK_STATS]     \(key): \(value)")
+                }
+            }
+            if let authHeader = req.value(forHTTPHeaderField: "Authorization") {
+                print("[DECK_STATS] ✅ Authorization header present")
+                print("[DECK_STATS]   Format check: \(authHeader.hasPrefix("Bearer ") ? "✅ Correct (Bearer prefix)" : "❌ Missing 'Bearer ' prefix")")
+                let tokenPart = authHeader.replacingOccurrences(of: "Bearer ", with: "")
+                print("[DECK_STATS]   Token length: \(tokenPart.count) characters")
+                print("[DECK_STATS]   Token preview: \(tokenPart.prefix(20))...")
+            } else {
+                print("[DECK_STATS] ⚠️ No Authorization header added")
+            }
+            #endif
+            
+            #if DEBUG
+            print("[DECK_STATS] Making HTTP request...")
+            #endif
+            
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            
+            #if DEBUG
+            print("[DECK_STATS] ✅ Received response")
+            print("[DECK_STATS] Response data length: \(data.count) bytes")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("[DECK_STATS] Response body: \(responseString)")
+            } else {
+                print("[DECK_STATS] ⚠️ Could not decode response as UTF-8")
+            }
+            #endif
+            
+            guard let httpResponse = resp as? HTTPURLResponse else {
+                #if DEBUG
+                print("[DECK_STATS] ❌ Invalid response type: \(type(of: resp))")
+                #endif
                 deckNewCount = nil
                 deckReviewCount = nil
                 return
             }
+            
+            #if DEBUG
+            print("[DECK_STATS] HTTP Status Code: \(httpResponse.statusCode)")
+            if let headers = httpResponse.allHeaderFields as? [String: String] {
+                print("[DECK_STATS] Response headers: \(headers)")
+            }
+            #endif
             
             struct DeckStatsResponse: Decodable {
                 let status: String
@@ -1723,15 +1830,100 @@ struct ContentView: View {
                 let review: Int
             }
             
-            let decoded = try JSONDecoder().decode(DeckStatsResponse.self, from: data)
-            if decoded.status == "ok" {
-                await MainActor.run {
-                    deckNewCount = decoded.new
-                    deckReviewCount = decoded.review
+            switch httpResponse.statusCode {
+            case 200:
+                #if DEBUG
+                print("[DECK_STATS] ✅ HTTP 200 - Attempting to decode JSON...")
+                #endif
+                do {
+                    let decoded = try JSONDecoder().decode(DeckStatsResponse.self, from: data)
+                    #if DEBUG
+                    print("[DECK_STATS] ✅ JSON decoded successfully")
+                    print("[DECK_STATS] Decoded response - status: '\(decoded.status)', deck: '\(decoded.deck)', new: \(decoded.new), review: \(decoded.review)")
+                    #endif
+                    
+                    if decoded.status == "ok" {
+                        await MainActor.run {
+                            deckNewCount = decoded.new
+                            deckReviewCount = decoded.review
+                        }
+                        #if DEBUG
+                        print("[DECK_STATS] ✅ Successfully set counts - New: \(decoded.new), Review: \(decoded.review)")
+                        #endif
+                    } else {
+                        #if DEBUG
+                        print("[DECK_STATS] ⚠️ Response status not 'ok': '\(decoded.status)'")
+                        #endif
+                        deckNewCount = nil
+                        deckReviewCount = nil
+                    }
+                } catch let decodeError {
+                    #if DEBUG
+                    print("[DECK_STATS] ❌ JSON decode failed: \(decodeError)")
+                    if let jsonString = String(data: data, encoding: .utf8) {
+                        print("[DECK_STATS] Raw JSON string: \(jsonString)")
+                    }
+                    #endif
+                    deckNewCount = nil
+                    deckReviewCount = nil
                 }
+            case 404:
+                #if DEBUG
+                print("[DECK_STATS] ❌ HTTP 404 - Endpoint or deck not found")
+                if let errorBody = String(data: data, encoding: .utf8) {
+                    print("[DECK_STATS] Error response: \(errorBody)")
+                    // If error says "Deck not found", it's a valid 404 for the deck
+                    // If error just says "Not Found", the endpoint might not exist
+                    if errorBody.contains("Deck not found") {
+                        print("[DECK_STATS] Deck '\(deckName)' doesn't exist in Anki")
+                    } else {
+                        print("[DECK_STATS] Endpoint '\(endpointPath)' might not exist or routing issue")
+                    }
+                }
+                #endif
+                // Set to 0 instead of nil so UI shows "New: 0 Review: 0" instead of nothing
+                await MainActor.run {
+                    deckNewCount = 0
+                    deckReviewCount = 0
+                }
+            case 401:
+                #if DEBUG
+                print("[DECK_STATS] ❌ HTTP 401 - Unauthorized (invalid or expired token)")
+                if let errorBody = String(data: data, encoding: .utf8) {
+                    print("[DECK_STATS] Error response: \(errorBody)")
+                }
+                #endif
+                deckNewCount = nil
+                deckReviewCount = nil
+            case 502:
+                #if DEBUG
+                print("[DECK_STATS] ❌ HTTP 502 - Bad Gateway (AnkiConnect error)")
+                if let errorBody = String(data: data, encoding: .utf8) {
+                    print("[DECK_STATS] Error response: \(errorBody)")
+                }
+                #endif
+                deckNewCount = nil
+                deckReviewCount = nil
+            default:
+                #if DEBUG
+                print("[DECK_STATS] ❌ HTTP error: \(httpResponse.statusCode)")
+                if let errorBody = String(data: data, encoding: .utf8) {
+                    print("[DECK_STATS] Error response: \(errorBody)")
+                }
+                #endif
+                deckNewCount = nil
+                deckReviewCount = nil
             }
-        } catch {
-            // Silently fail - stats will remain nil
+        } catch let error {
+            #if DEBUG
+            print("[DECK_STATS] ❌ Exception occurred: \(error)")
+            print("[DECK_STATS] Error type: \(type(of: error))")
+            print("[DECK_STATS] Error description: \(error.localizedDescription)")
+            if let urlError = error as? URLError {
+                print("[DECK_STATS] URLError code: \(urlError.code.rawValue)")
+                print("[DECK_STATS] URLError description: \(urlError.localizedDescription)")
+            }
+            #endif
             deckNewCount = nil
             deckReviewCount = nil
         }
@@ -1960,6 +2152,11 @@ struct ContentView: View {
         showBackDuringProcessing = false
         hasPromptedForAnswer = false
         isListening = false
+        
+        // Re-fetch deck stats if a deck is selected
+        if !selectedDeck.isEmpty {
+            await fetchDeckStats(for: selectedDeck)
+        }
         
         #if DEBUG
         print("[RETURN] Returned to deck selection")

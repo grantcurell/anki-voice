@@ -5,7 +5,8 @@ from typing import List
 
 AC = "http://127.0.0.1:8765"
 
-async def ac_call(action, params=None, version=6):
+async def ac_call_raw(action, params=None, version=6):
+    """Low-level helper: returns raw AnkiConnect JSON response {"result": ..., "error": ...}"""
     payload = {"action": action, "version": version}
     if params:
         payload["params"] = params
@@ -26,6 +27,28 @@ async def ac_call(action, params=None, version=6):
         raise Exception(f"AnkiConnect error: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         raise Exception(f"AnkiConnect error: {str(e)}")
+
+async def ac_call_checked(action, params=None, version=6):
+    """High-level helper: returns the result value, handling both dict and list responses"""
+    data = await ac_call_raw(action, params=params, version=version)
+    
+    # Handle "we actually got a list directly" just in case
+    if isinstance(data, list):
+        return data
+    
+    if not isinstance(data, dict):
+        raise Exception(f"Unexpected AnkiConnect response type for {action}: {type(data)} - {data!r}")
+    
+    err = data.get("error")
+    if err:
+        raise Exception(f"AnkiConnect error on {action}: {err}")
+    
+    return data.get("result")
+
+# Keep ac_call as alias for backward compatibility (but prefer ac_call_checked for new code)
+async def ac_call(action, params=None, version=6):
+    """Legacy alias - returns raw response. Use ac_call_checked() for new code."""
+    return await ac_call_raw(action, params=params, version=version)
 
 async def show_answer():
     try:
@@ -176,24 +199,39 @@ async def sync():
 
 async def get_deck_stats(deck_name: str):
     """Get statistics for a deck: new cards and review cards count"""
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    
     try:
         # Find new cards in the deck
-        new_cards_result = await ac_call("findCards", {"query": f"deck:\"{deck_name}\" is:new"})
-        new_count = 0
-        if isinstance(new_cards_result, dict) and new_cards_result.get("error") is None:
-            new_cards = new_cards_result.get("result", [])
-            new_count = len(new_cards) if isinstance(new_cards, list) else 0
+        new_cards_raw = await ac_call_raw("findCards", {"query": f'deck:"{deck_name}" is:new'})
+        log.info(f"[DECK_STATS] new_cards_raw response type: {type(new_cards_raw)}, value: {repr(new_cards_raw)[:200]}")
+        
+        new_cards = await ac_call_checked(
+            "findCards",
+            {"query": f'deck:"{deck_name}" is:new'}
+        )
+        log.info(f"[DECK_STATS] new_cards after ac_call_checked type: {type(new_cards)}, length: {len(new_cards) if isinstance(new_cards, list) else 'N/A'}")
         
         # Find review cards (due cards) in the deck
-        review_cards_result = await ac_call("findCards", {"query": f"deck:\"{deck_name}\" is:due"})
-        review_count = 0
-        if isinstance(review_cards_result, dict) and review_cards_result.get("error") is None:
-            review_cards = review_cards_result.get("result", [])
-            review_count = len(review_cards) if isinstance(review_cards, list) else 0
+        review_cards_raw = await ac_call_raw("findCards", {"query": f'deck:"{deck_name}" is:due'})
+        log.info(f"[DECK_STATS] review_cards_raw response type: {type(review_cards_raw)}, value: {repr(review_cards_raw)[:200]}")
+        
+        review_cards = await ac_call_checked(
+            "findCards",
+            {"query": f'deck:"{deck_name}" is:due'}
+        )
+        log.info(f"[DECK_STATS] review_cards after ac_call_checked type: {type(review_cards)}, length: {len(review_cards) if isinstance(review_cards, list) else 'N/A'}")
+        
+        new_count = len(new_cards) if isinstance(new_cards, list) else 0
+        review_count = len(review_cards) if isinstance(review_cards, list) else 0
+        
+        log.info(f"[DECK_STATS] Final counts - new: {new_count}, review: {review_count}")
         
         return {
             "new": new_count,
             "review": review_count
         }
     except Exception as e:
+        log.error(f"[DECK_STATS] Exception: {str(e)}")
         raise Exception(f"Failed to get deck stats: {str(e)}")

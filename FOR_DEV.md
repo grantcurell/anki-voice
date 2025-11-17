@@ -119,6 +119,8 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │  │  • undo_review() - Undoes last grade                  │  │
 │  │  • get_deck_names() - Gets all deck names              │  │
 │  │  • gui_deck_review() - Switches to a deck             │  │
+│  │  • get_deck_stats() - Gets new/review card counts     │  │
+│  │  • ac_call_checked() - Helper for AnkiConnect calls  │  │
 │  │  • sync() - Synchronizes with self-hosted server      │  │
 │  │  • suspend_cards() - Suspends cards                    │  │
 │  │  • retrieve_media_file() - Reads from media folder    │  │
@@ -1108,6 +1110,71 @@ curl -X POST "http://127.0.0.1:8000/switch-deck?name=Spanish%201"
 
 ---
 
+#### GET /anki/deck-stats (Production) or GET /deck-stats (Local Dev)
+
+**Purpose**: Get statistics for a specific deck: count of new cards and review cards (due cards).
+
+**Authentication**: 
+- Production (`/anki/deck-stats`): Requires JWT Bearer token
+- Local Dev (`/deck-stats`): No authentication required
+
+**Request**: Query parameter `name` (deck name as string)
+
+**Response (Success - 200 OK)**:
+```json
+{
+  "status": "ok",
+  "deck": "Norwegian",
+  "new": 18,
+  "review": 50
+}
+```
+
+**Response (Error)**:
+- `404 Not Found`: `"Deck not found: <deck name>"` or `"Not Found"` (if endpoint doesn't exist)
+- `502 Bad Gateway`: `"Failed to get deck stats: <error message>"`
+- `401 Unauthorized`: `"Invalid or expired token"` (production only)
+
+**Example (Production)**:
+```bash
+curl -H "Authorization: Bearer <JWT_TOKEN>" \
+  "https://api.grantcurell.com/anki/deck-stats?name=Norwegian"
+```
+
+**Example (Local Dev)**:
+```bash
+curl "http://127.0.0.1:8000/deck-stats?name=Norwegian"
+```
+
+**Status Codes**:
+- `200 OK` - Successfully retrieved deck statistics
+- `404 Not Found` - Deck doesn't exist or endpoint not found
+- `502 Bad Gateway` - AnkiConnect error
+- `401 Unauthorized` - Invalid/expired token (production only)
+
+**Implementation Details**:
+1. Validates that the deck exists using `get_deck_names()` (optional, can return 0/0 if deck doesn't exist)
+2. Calls AnkiConnect `findCards` with query `deck:"<name>" is:new` to get new cards
+3. Calls AnkiConnect `findCards` with query `deck:"<name>" is:due` to get review cards
+4. Counts the card IDs in each result array
+5. Returns the counts in the response
+
+**AnkiConnect Queries**:
+- New cards: `{"action": "findCards", "version": 6, "params": {"query": "deck:\"Norwegian\" is:new"}}`
+- Review cards: `{"action": "findCards", "version": 6, "params": {"query": "deck:\"Norwegian\" is:due"}}`
+
+**Important Notes**:
+- Deck names in queries are quoted: `deck:"Norwegian"` (not `deck:Norwegian`) to handle spaces and special characters
+- Uses `ac_call_checked()` helper which handles both dict `{"result": [...], "error": null}` and direct list responses from AnkiConnect
+- The endpoint automatically selects the correct path based on authentication status in the iOS app
+
+**Server Implementation**:
+- `get_deck_stats(deck_name)` in `app/ankiconnect.py` - Makes AnkiConnect queries and counts results
+- Uses `ac_call_checked()` helper for robust response handling
+- Returns `{"new": count, "review": count}` dictionary
+
+---
+
 #### POST /sync
 
 **Purpose**: Synchronize Anki collection with self-hosted sync server.
@@ -1199,6 +1266,7 @@ AnkiConnect is a separate add-on that must be installed in Anki. The server uses
 - `guiUndoReview` - Undoes the last review action
 - `deckNames` - Gets list of all deck names
 - `guiDeckReview` - Opens reviewer for a specific deck
+- `findCards` - Finds cards matching a query (used for deck statistics: `deck:"<name>" is:new` and `deck:"<name>" is:due`)
 - `sync` - Synchronizes collection with self-hosted sync server
 - `suspend` - Suspends cards (they won't appear in reviews)
 - `cardsInfo` - Gets card information including deck name
@@ -1556,17 +1624,25 @@ func syncAnki() async
     - Sends `GET /decks` to server
     - Populates `availableDecks` state variable
 
-16. **`syncAnki() async`**
+16. **`fetchDeckStats(for deckName: String) async`**
+    - Sends `GET /anki/deck-stats?name=<deck>` (production) or `GET /deck-stats?name=<deck>` (local dev)
+    - Automatically selects endpoint path based on authentication status
+    - Uses `URLComponents` for proper URL construction and query encoding
+    - Updates `deckNewCount` and `deckReviewCount` state variables
+    - Sets counts to 0 on error (so UI shows "New: 0 Review: 0" instead of nothing)
+    - Includes comprehensive debug logging for troubleshooting
+
+17. **`syncAnki() async`**
     - Sends `POST /sync` to server
     - Shows loading indicator while syncing
     - Provides TTS feedback when complete
 
-17. **`returnToDeckSelection() async`**
+18. **`returnToDeckSelection() async`**
     - Stops all audio I/O
     - Resets state to `.idle`
     - Returns to home screen
 
-18. **`stopAllIO(deactivateSession:)`**
+19. **`stopAllIO(deactivateSession:)`**
     - Stops TTS and STT
     - Optionally deactivates `AVAudioSession`
     - Used during state transitions
@@ -2456,6 +2532,7 @@ Language is determined by the `lang` attribute in README divs:
 - **Authorize Speech & Mic Button**: Requests permissions (only shown if not granted)
 - **Open Settings Button**: Opens iPhone Settings (shown if permissions denied)
 - **Deck Selection Dropdown**: Select which deck to review (loads via `/decks` endpoint)
+- **Deck Statistics Display**: Shows "New: X Review: Y" below selected deck (fetched via `/anki/deck-stats` or `/deck-stats`)
 - **Start Review Button**: Begins review session (changes to "Return to deck selection" during review)
 - **Sync Button**: Synchronizes Anki with self-hosted sync server (only shown when idle)
 
