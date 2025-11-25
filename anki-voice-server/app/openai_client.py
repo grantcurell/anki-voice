@@ -35,7 +35,7 @@ async def _call_ollama_chat(system: str, user: str, timeout: int = 45) -> str:
     return (text or "").strip()
 
 
-async def grade_with_gpt5_explanation(question: str, reference: str, transcript: str) -> str:
+async def grade_with_llm_explanation(question: str, reference: str, transcript: str) -> str:
     """
     Returns a brief explanation of what was wrong, if anything.
     Returns 'Correct.' if the answer is correct or the model returns nothing.

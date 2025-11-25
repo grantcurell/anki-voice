@@ -1,11 +1,11 @@
 # Anki Voice System
 
-A complete hands-free Anki card review system that uses speech recognition, semantic grading with GPT-5, and text-to-speech to enable voice-based flashcard review on iPhone while preserving Anki's scheduling algorithm.
+A complete hands-free Anki card review system that uses speech recognition, semantic grading with LLM (Ollama), and text-to-speech to enable voice-based flashcard review on iPhone while preserving Anki's scheduling algorithm.
 
 ## 🎯 What This Does
 
 - **iPhone App**: Reads card fronts aloud, captures your spoken answers, and announces grading results
-- **FastAPI Server**: Bridges between iPhone and Anki, provides semantic grading using GPT-5
+- **FastAPI Server**: Bridges between iPhone and Anki, provides semantic grading using LLM (Ollama with GPU acceleration)
 - **Anki Add-on**: Exposes current card data for the voice system to access
 - **AnkiConnect Integration**: Sends review results back to Anki's scheduler
 
@@ -14,7 +14,7 @@ A complete hands-free Anki card review system that uses speech recognition, sema
 ```
 iPhone App (SwiftUI) ←→ FastAPI Server ←→ Anki Add-on ←→ Anki Desktop
                               ↓
-                         OpenAI GPT-5 API
+                         Ollama LLM API (GPU)
                               ↓
                          AnkiConnect ←→ Anki Desktop
 ```
@@ -35,7 +35,7 @@ Anki Voice/
 
 - **macOS/Windows/Linux**: Anki 2.1.x installed
 - **iPhone**: iOS 13.0+ with physical device (speech recognition requires device)
-- **OpenAI API Key**: With GPT-5 access
+- **Ollama LLM Backend**: GPU-accelerated (configured in Kubernetes)
 - **Python 3.12+**: For the server (recommended)
 - **Homebrew**: For macOS Python installation
 - **Xcode**: For iOS development
@@ -55,14 +55,13 @@ Anki Voice/
    - Enter code: `2055492159`
    - Restart Anki
 
-3. **Configure OpenAI API**:
+3. **Configure LLM Backend**:
    ```bash
    cd anki-voice-server
-   # Create .env file with your OpenAI API key
-   echo "OPENAI_API_KEY=sk-your-key-here" > .env
-   echo "OPENAI_API_BASE=https://api.openai.com/v1" >> .env
-   echo "OPENAI_MODEL=gpt-5-mini" >> .env
-   echo "USE_GPT5=1" >> .env
+   # Create .env file with Ollama configuration
+   echo "OLLAMA_BASE_URL=http://ollama.ollama.svc.cluster.local:11434" > .env
+   echo "OLLAMA_MODEL=llama2:latest" >> .env
+   echo "USE_LLM=1" >> .env
    ```
 
 4. **Start the server**:
@@ -244,7 +243,7 @@ Ask follow-up questions about the current card:
 - `"compare"`
 - `"more about"`
 
-Any sentence starting with question words or containing "explain", "clarify", "more about", "don't understand", or similar phrases will be treated as a question. The app uses GPT-5 to answer your question using the card's context.
+Any sentence starting with question words or containing "explain", "clarify", "more about", "don't understand", or similar phrases will be treated as a question. The app uses LLM (Ollama) to answer your question using the card's context.
 
 #### Read Answer (During Action Phase)
 - `"read answer"`
@@ -364,7 +363,7 @@ Any sentence starting with question words or containing "explain", "clarify", "m
    - You can use voice commands (reread question, read answer, etc.)
    - After ~1.8 seconds of silence, your answer is captured
 4. **Grading**:
-   - **Normal path**: Answer is sent to GPT-5 for semantic grading
+   - **Normal path**: Answer is sent to LLM (Ollama) for semantic grading
    - **Skip paths**: If you say "read answer" or "I don't know", grading is skipped
    - **Immediate grade**: If you say an unambiguous grade command, it's submitted immediately
 5. **Explanation**: App speaks feedback about your answer (if using normal path)
@@ -427,10 +426,9 @@ The app will:
 
 ### Server (.env)
 ```env
-OPENAI_API_KEY=sk-your-key-here
-OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5-mini
-USE_GPT5=1
+OLLAMA_BASE_URL=http://ollama.ollama.svc.cluster.local:11434
+OLLAMA_MODEL=llama2:latest
+USE_LLM=1
 ```
 
 ### iOS App
@@ -470,7 +468,7 @@ curl -X POST http://127.0.0.1:8000/grade-with-explanation \
 1. **"No card is ready"**: Make sure you're in Anki's reviewer (not deck browser)
 2. **Speech recognition fails**: Requires physical iOS device, not simulator
 3. **Server connection fails**: Check iPhone and desktop are on same network
-4. **Grading fails**: Verify OpenAI API key is correct and has GPT-5 access
+4. **Grading fails**: Verify Ollama LLM backend is running and accessible
 5. **Sync button does nothing**: Check that Anki is running and AnkiConnect is installed
 6. **Mute button doesn't work**: Make sure you're using the latest version of the app
 

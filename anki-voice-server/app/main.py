@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
 from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync, gui_current_card, get_deck_stats
-from .openai_client import grade_with_gpt5_explanation, answer_followup
+from .openai_client import grade_with_llm_explanation, answer_followup
 
 # Load environment variables from .env file
 load_dotenv()
@@ -23,7 +23,7 @@ log = logging.getLogger("uvicorn.error")
 
 ADDON_BASE = "http://127.0.0.1:8770"
 
-USE_GPT5 = os.getenv("USE_GPT5", "1") == "1"
+USE_LLM = os.getenv("USE_LLM", "1") == "1"  # Enable LLM features (was USE_GPT5)
 
 app = FastAPI(title="Anki Voice Server")
 
@@ -256,7 +256,7 @@ async def api_grade_with_explanation(inp: GradeIn):
         raise HTTPException(400, "grade-with-explanation requires question_text and reference_text")
 
     # Test mode: return dummy response without calling LLM
-    if not USE_GPT5:
+    if not USE_LLM:
         return {"explanation": "Test mode: looks correct."}
 
     # Check for API key early and fail clearly
@@ -264,7 +264,7 @@ async def api_grade_with_explanation(inp: GradeIn):
         raise HTTPException(503, detail="OPENAI_API_KEY is not set on the server")
 
     try:
-        explanation = await grade_with_gpt5_explanation(
+        explanation = await grade_with_llm_explanation(
             question=inp.question_text,
             reference=inp.reference_text,
             transcript=inp.transcript

@@ -46,7 +46,7 @@ SwiftUI iOS app that provides hands-free Anki card review using speech recogniti
 
 The app communicates with the FastAPI server which:
 - Fetches current card data from the Anki add-on
-- Grades spoken answers using rule-based matching and GPT-5
+- Grades spoken answers using rule-based matching and LLM (Ollama)
 - Sends review results back to Anki via AnkiConnect
 
 ## Troubleshooting

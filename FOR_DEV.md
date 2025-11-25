@@ -7,7 +7,7 @@
 ### What We're Building
 
 - **iPhone App (SwiftUI)**: Reads card fronts aloud, captures spoken answers, and announces grading results
-- **FastAPI Server (Python)**: Bridges iPhone and Anki, provides semantic grading using GPT-5-mini
+- **FastAPI Server (Python)**: Bridges iPhone and Anki, provides semantic grading using LLM (Ollama with GPU acceleration)
 - **Anki Voice Bridge Add-on (Python)**: Exposes current card data for the voice system to access
 - **AnkiConnect Integration**: Sends review results back to Anki's scheduler
 
@@ -92,10 +92,10 @@ Traditional Anki review requires visual attention and manual clicking. This syst
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  app/openai_client.py                                 │  │
-│  │  • grade_with_gpt5() - Basic grading                  │  │
-│  │  • grade_with_gpt5_explanation() - Detailed feedback  │  │
+│  │  • grade_with_llm() - Basic grading                   │  │
+│  │  • grade_with_llm_explanation() - Detailed feedback    │  │
 │  │  • answer_followup() - Q&A about cards                │  │
-│  │  • Uses GPT-5 Responses API format                    │  │
+│  │  • Uses Ollama LLM API (GPU-accelerated)              │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐  │
@@ -241,7 +241,7 @@ Traditional Anki review requires visual attention and manual clicking. This syst
      ```
    - Server processes:
      - First tries rule-based matching in `judge.py`
-     - If not perfect, calls `grade_with_gpt5_explanation()` in `openai_client.py`
+     - If not perfect, calls `grade_with_llm_explanation()` in `openai_client.py`
      - Returns: `{correct: bool, explanation: string, confidence: float, missing: [], extras: []}`
 
 6. **iOS app receives explanation**
@@ -286,7 +286,7 @@ Anki Voice/
 │   │   ├── ankiconnect.py          # AnkiConnect API client wrapper
 │   │   ├── judge.py               # Rule-based grading logic
 │   │   ├── normalize.py           # Text processing (HTML stripping, normalization)
-│   │   ├── openai_client.py       # GPT-5 API integration
+│   │   ├── openai_client.py       # LLM API integration (Ollama)
 │   │   └── __pycache__/           # Python bytecode cache (gitignored)
 │   ├── venv/                       # Python 3.12 virtual environment (gitignored)
 │   │   ├── bin/                    # Executables (python, pip, uvicorn, etc.)
@@ -305,8 +305,8 @@ Anki Voice/
 │   │   # Contents:
 │   │   # OPENAI_API_KEY=sk-...
 │   │   # OPENAI_API_BASE=https://api.openai.com/v1
-│   │   # OPENAI_MODEL=gpt-5-mini
-│   │   # USE_GPT5=1
+│   │   # OLLAMA_MODEL=llama2:latest
+│   │   # USE_LLM=1
 │   ├── activate.sh                 # Helper script to activate venv and show instructions
 │   ├── server.log                  # Server logs (gitignored, may not exist)
 │   └── README.md                   # Server-specific documentation
@@ -364,7 +364,7 @@ Anki Voice/
 - Xcode configured with your Apple Developer account (for device deployment)
 
 **API Requirements:**
-- OpenAI API key with GPT-5 access
+- LLM backend configured (Ollama with GPU acceleration)
 - API key must start with `sk-` and have sufficient credits
 
 ### Step 1: Clone the Repository
@@ -430,8 +430,8 @@ cd anki-voice-server
 cat > .env << EOF
 OPENAI_API_KEY=sk-your-actual-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5-mini
-USE_GPT5=1
+OLLAMA_MODEL=llama2:latest
+USE_LLM=1
 EOF
 
 # Replace sk-your-actual-key-here with your real OpenAI API key
@@ -445,8 +445,8 @@ cat .env
 **Environment Variable Details:**
 - `OPENAI_API_KEY`: Your OpenAI API key starting with `sk-`. **REQUIRED** for LLM grading.
 - `OPENAI_API_BASE`: Base URL for OpenAI API. Default: `https://api.openai.com/v1`. **Only change if using proxy or custom endpoint.**
-- `OPENAI_MODEL`: Model to use. Default: `gpt-5-mini`. **Must be a model you have access to.**
-- `USE_GPT5`: Set to `1` to enable LLM grading, `0` to disable (test mode). Default: `1`.
+- `OLLAMA_MODEL`: Model to use. Default: `llama2:latest`. **Must be a model available in Ollama.**
+- `USE_LLM`: Set to `1` to enable LLM grading, `0` to disable (test mode). Default: `1`.
 
 **Important**: Never commit the `.env` file. It's already in `.gitignore`.
 
@@ -729,7 +729,7 @@ curl http://127.0.0.1:8000/current
 
 #### POST /grade
 
-**Purpose**: Grade a spoken transcript using rule-based matching and optionally GPT-5.
+**Purpose**: Grade a spoken transcript using rule-based matching and optionally LLM (Ollama).
 
 **Request Body**:
 ```json
@@ -777,8 +777,8 @@ curl -X POST http://127.0.0.1:8000/grade \
 
 **Implementation Details**:
 1. First calls `list_set_match()` from `judge.py` with hardcoded SNASSI rules
-2. If verdict is not "correct" AND `USE_GPT5=1` AND `question_text`/`reference_text` are provided:
-   - Calls `grade_with_gpt5()` from `openai_client.py`
+2. If verdict is not "correct" AND `USE_LLM=1` AND `question_text`/`reference_text` are provided:
+   - Calls `grade_with_llm()` from `openai_client.py`
    - If LLM returns `correct=true` and `confidence >= 0.65`, overrides verdict
 3. Maps verdict to ease using `ease_from_verdict()`:
    - `"correct"` with `confidence > 0.85` → ease 4 (Easy)
@@ -815,7 +815,7 @@ curl -X POST http://127.0.0.1:8000/grade \
 }
 ```
 
-**Response (Test Mode - when USE_GPT5=0)**:
+**Response (Test Mode - when USE_LLM=0)**:
 ```json
 {
   "correct": true,
@@ -853,9 +853,9 @@ curl -X POST http://127.0.0.1:8000/grade-with-explanation \
 
 **Implementation Details**:
 1. Validates that `question_text` and `reference_text` are provided
-2. If `USE_GPT5=0`, returns test mode response (no LLM call)
-3. Checks for `OPENAI_API_KEY` environment variable
-4. Calls `grade_with_gpt5_explanation()` from `openai_client.py`
+2. If `USE_LLM=0`, returns test mode response (no LLM call)
+3. Checks for `OLLAMA_BASE_URL` environment variable
+4. Calls `grade_with_llm_explanation()` from `openai_client.py`
 5. Parses JSON from LLM response
 6. Returns formatted response with type coercion
 
@@ -945,7 +945,7 @@ curl -X POST http://127.0.0.1:8000/undo
 
 #### POST /ask
 
-**Purpose**: Ask a follow-up question about the current card. Uses GPT-5 to answer questions using card context.
+**Purpose**: Ask a follow-up question about the current card. Uses LLM (Ollama) to answer questions using card context.
 
 **Request Body**:
 ```json
@@ -960,7 +960,7 @@ curl -X POST http://127.0.0.1:8000/undo
 **Response**:
 ```json
 {
-  "answer": "GPT-5's answer to the question"
+  "answer": "LLM's answer to the question"
 }
 ```
 
@@ -986,7 +986,7 @@ curl -X POST http://127.0.0.1:8000/ask \
 **Implementation Details**:
 - Validates `question_text` and `reference_text` are provided
 - Calls `answer_followup()` from `openai_client.py`
-- Uses GPT-5 to generate a concise answer (3-6 sentences)
+- Uses LLM (Ollama) to generate a concise answer (3-6 sentences)
 - Returns plain text answer
 
 **Timeout**: 45 seconds
@@ -2020,7 +2020,7 @@ curl -X POST http://127.0.0.1:8000/submit-grade \
   1. Check `OPENAI_API_KEY` in `.env` file
   2. Verify API key is valid and has credits
   3. Check server logs for OpenAI API errors
-  4. Verify `OPENAI_MODEL` is correct (default: `gpt-5-mini`)
+  4. Verify `OLLAMA_MODEL` is correct (default: `llama2:latest`)
   5. Check network connectivity from server to OpenAI
 
 **"OPENAI_API_KEY is not set on the server" (HTTP 503)**
@@ -2351,7 +2351,7 @@ pip install -r requirements.txt
 - [Anki Add-ons Guide](https://addon-docs.ankiweb.net/) - How to write Anki add-ons
 - [Apple Speech Framework](https://developer.apple.com/documentation/speech) - Speech recognition API
 - [Apple AVSpeechSynthesizer](https://developer.apple.com/documentation/avfaudio/avspeechsynthesizer) - Text-to-speech API
-- [OpenAI API Documentation](https://platform.openai.com/docs) - GPT-5 API reference
+- [Ollama Documentation](https://github.com/ollama/ollama) - LLM API reference
 - [FastAPI Documentation](https://fastapi.tiangolo.com/) - Web framework docs
 
 ### Project-Specific Files
@@ -2418,7 +2418,7 @@ After the explanation is read, you can use these commands:
 - Any sentence starting with question words (what, why, how, when, where, who, which)
 - Phrases containing: `"explain"`, `"clarify"`, `"tell me"`, `"give me"`, `"help me"`, `"don't understand"`, `"not clear"`
 - **Implementation**: `IntentParser.parse()` detects questions, handled in `listenForAction()`
-- **Behavior**: Sends to `/ask` endpoint, speaks GPT-5's answer
+- **Behavior**: Sends to `/ask` endpoint, speaks LLM's answer
 
 #### Read Answer (During Action Phase)
 - `"read answer"`, `"read the answer"`, `"show answer"`, `"tell me the answer"`
