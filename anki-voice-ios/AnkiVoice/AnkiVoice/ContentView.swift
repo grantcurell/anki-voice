@@ -939,7 +939,7 @@ final class SpeechSTT: NSObject, ObservableObject {
 
 @MainActor
 struct ContentView: View {
-    @AppStorage("serverBaseURL") private var server = defaultDevURL
+    @AppStorage("serverBaseURL") private var server = productionAPIURL
     @AppStorage("didRequestMicOnce") private var didRequestMicOnce = false
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var authService = AuthService.shared
