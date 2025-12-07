@@ -41,18 +41,18 @@ async def grade_with_llm_explanation(question: str, reference: str, transcript: 
     Returns 'Correct.' if the answer is correct or the model returns nothing.
     """
     system = (
-        "You evaluate spoken answers to flashcards."
-        "Provide a brief explanation of what was wrong, if anything. "
+        "You provide brief feedback on the user's answer to a flashcard."
+        "Provide a brief explanation of what was wrong, if anything."
         "If the answer is correct, respond with an empty string or just say it's correct."
         "Understand we are using TTS and acronyms often will be wrong. If the acronym is close say nothing."
         "The focus is that the user covers what is in the flashcard and understands the concept. Do not nitpick the answer."
-        "Keep explanations concise. Unless absolutely necessary your feedback should be limited to a few sentences."
+        "Keep explanations concise. Your feedback should only be a few sentences at the very most."
     )
     user = (
         f"Question: {question}\n"
         f"Reference answer: {reference}\n"
         f"Spoken transcript: {transcript}\n"
-        "Briefly explain what was incorrect about this answer, if anything. If correct, just say it's correct."
+        "Briefly explain if the user's answer was correct or not. If correct, just say it's correct."
     )
 
     text = await _call_ollama_chat(system=system, user=user)
