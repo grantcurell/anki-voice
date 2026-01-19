@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from .normalize import html_to_text, html_to_text_readme_only
 from .judge import list_set_match, ease_from_verdict
 from .ankiconnect import show_answer, answer_card, undo_review, get_note_id, delete_note, suspend_cards, get_card_info, get_note_info, retrieve_media_file, close_reviewer, AC, get_deck_names, gui_deck_review, sync, gui_current_card, get_deck_stats
-from .openai_client import grade_with_llm_explanation, answer_followup
+from .openai_client import grade_with_llm_explanation, answer_followup, get_example_in_spanish
 
 # Load environment variables from .env file
 load_dotenv()
@@ -308,6 +308,31 @@ async def ask_about_card(inp: AskIn):
         user_question=inp.question
     )
     return {"answer": text}
+
+class ExampleIn(BaseModel):
+    cardId: int
+    question_text: Optional[str] = None
+    reference_text: Optional[str] = None
+
+@app.post("/example")
+async def get_example(inp: ExampleIn):
+    """Get an example usage in Spanish based on the flashcard content"""
+    if not inp.question_text or not inp.reference_text:
+        raise HTTPException(400, "example requires question_text and reference_text")
+    
+    # Check for API key early and fail clearly
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(503, detail="OPENAI_API_KEY is not set on the server")
+    
+    try:
+        example = await get_example_in_spanish(
+            question_text=inp.question_text,
+            reference_text=inp.reference_text
+        )
+        return {"example": example}
+    except Exception as e:
+        log.error("LLM call failed for example: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(502, detail=f"LLM backend failed: {e}")
 
 @app.get("/decks")
 async def get_decks():

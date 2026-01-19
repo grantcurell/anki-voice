@@ -218,6 +218,10 @@ struct AskResponse: Decodable {
     let answer: String
 }
 
+struct ExampleResponse: Decodable {
+    let example: String
+}
+
 fileprivate struct AnyDecodable: Decodable {
     enum ValueType {
         case null
@@ -2606,6 +2610,17 @@ struct ContentView: View {
                 return
             }
             
+            // 2.5) Give me an example phrases (request example in Spanish)
+            let examplePhrases = [
+                "give me an example", "give me an example usage", "show me an example", "example usage", "example"
+            ]
+            if examplePhrases.contains(where: { lower.contains($0) }) {
+                stt.stop()
+                isListening = false
+                await handleExampleRequest()
+                return
+            }
+            
             // 3) Read Answer phrases (skip LLM, read back and go to action phase)
             let readAnswerPhrases = [
                 "read answer", "read the answer", "show answer", "tell me the answer"
@@ -2969,6 +2984,199 @@ struct ContentView: View {
         await listenForAnswerContinuous()
     }
     
+    @MainActor
+    func handleExampleRequest() async {
+        // Can be called from either .awaitingAnswer or .awaitingAction states
+        let (cid, front, back): (Int, String, String)
+        
+        switch state {
+        case .awaitingAnswer(let cardId, let frontText, let backText):
+            (cid, front, back) = (cardId, frontText, backText)
+        case .awaitingAction(let cardId, let frontText, let backText):
+            (cid, front, back) = (cardId, frontText, backText)
+        default:
+            return
+        }
+        
+        struct Payload: Encodable {
+            let cardId: Int
+            let question_text: String?
+            let reference_text: String?
+        }
+        
+        let p = Payload(cardId: cid, question_text: front, reference_text: back)
+        
+        // Short timeout for example request
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 10.0
+        config.timeoutIntervalForResource = 15.0
+        let session = URLSession(configuration: config)
+        
+        guard let base = validatedBaseURL() else {
+            tts.speak("Invalid server URL.")
+            // Return to appropriate state
+            if case .awaitingAnswer = state {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                await listenForAnswerContinuous()
+            } else {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                await listenForAction()
+            }
+            return
+        }
+        
+        // Determine endpoint path based on whether we're authenticated (production) or not (local dev)
+        let endpointPath = authService.isAuthenticated ? "/anki/example" : "/example"
+        guard let url = URL(string: "\(base)\(endpointPath)") else {
+            tts.speak("Invalid server URL.")
+            // Return to appropriate state
+            if case .awaitingAnswer = state {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                await listenForAnswerContinuous()
+            } else {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                await listenForAction()
+            }
+            return
+        }
+        
+        #if DEBUG
+        print("[Example] Request URL: \(url.absoluteString)")
+        print("[Example] Is authenticated: \(authService.isAuthenticated)")
+        print("[Example] Endpoint path: \(endpointPath)")
+        #endif
+        
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        authService.addAuthHeader(to: &req)
+        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(p)
+        
+        // Retry once
+        for attempt in 0..<2 {
+            if Task.isCancelled { return }
+            
+            do {
+                let (data, response) = try await session.data(for: req)
+                if Task.isCancelled { return }
+                
+                // Check HTTP status code
+                if let httpResponse = response as? HTTPURLResponse {
+                    #if DEBUG
+                    print("[Example] HTTP Status: \(httpResponse.statusCode)")
+                    print("[Example] Response data length: \(data.count) bytes")
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        let preview = responseString.count > 500 ? String(responseString.prefix(500)) + "..." : responseString
+                        print("[Example] Response body: \(preview)")
+                    }
+                    #endif
+                    
+                    // Handle HTTP errors
+                    if httpResponse.statusCode != 200 {
+                        #if DEBUG
+                        print("[Example] ❌ HTTP error: \(httpResponse.statusCode)")
+                        #endif
+                        if attempt == 0 && httpResponse.statusCode == 404 {
+                            // Try the non-prefixed endpoint if 404 on /anki/example
+                            if authService.isAuthenticated && endpointPath == "/anki/example" {
+                                #if DEBUG
+                                print("[Example] Trying /example endpoint instead")
+                                #endif
+                                if let altUrl = URL(string: "\(base)/example") {
+                                    var altReq = URLRequest(url: altUrl)
+                                    altReq.httpMethod = "POST"
+                                    authService.addAuthHeader(to: &altReq)
+                                    altReq.addValue("application/json", forHTTPHeaderField: "Content-Type")
+                                    altReq.httpBody = try? JSONEncoder().encode(p)
+                                    
+                                    let (altData, altResponse) = try await session.data(for: altReq)
+                                    if let altHttpResponse = altResponse as? HTTPURLResponse, altHttpResponse.statusCode == 200 {
+                                        if let result = try? JSONDecoder().decode(ExampleResponse.self, from: altData) {
+                                            #if os(iOS)
+                                            await director.handle(.toTTS(stt))
+                                            #endif
+                                            await tts.speakAndWait(result.example, language: "es-ES")
+                                            if case .awaitingAnswer = state {
+                                                try? await Task.sleep(nanoseconds: 200_000_000)
+                                                stt.transcript = ""
+                                                stt.isFinal = false
+                                                await listenForAnswerContinuous()
+                                            } else {
+                                                try? await Task.sleep(nanoseconds: 200_000_000)
+                                                await listenForAction()
+                                            }
+                                            return
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if attempt == 0 {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            continue
+                        }
+                    }
+                }
+                
+                if let result = try? JSONDecoder().decode(ExampleResponse.self, from: data) {
+                    if Task.isCancelled { return }
+                    
+                    #if DEBUG
+                    print("[Example] ✅ Successfully decoded response")
+                    #endif
+                    
+                    // Re-assert TTS route right before speaking
+                    #if os(iOS)
+                    await director.handle(.toTTS(stt))
+                    #endif
+                    
+                    // Speak the example in Spanish (the AI response is already in Spanish)
+                    // Use Spanish language code for TTS
+                    await tts.speakAndWait(result.example, language: "es-ES")
+                    
+                    // Return to appropriate state
+                    if case .awaitingAnswer = state {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        // Clear transcript before resuming listening
+                        stt.transcript = ""
+                        stt.isFinal = false
+                        await listenForAnswerContinuous()
+                    } else {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        await listenForAction()
+                    }
+                    return
+                } else {
+                    #if DEBUG
+                    print("[Example] ❌ Failed to decode response as ExampleResponse")
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        print("[Example] Raw response: \(responseString)")
+                    }
+                    #endif
+                }
+            } catch {
+                #if DEBUG
+                print("[Example] ❌ Request failed (attempt \(attempt)): \(error)")
+                #endif
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
+            }
+        }
+        
+        // If we get here, all attempts failed
+        tts.speak("I couldn't get an example. Please try again.")
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        
+        // Return to appropriate state
+        if case .awaitingAnswer = state {
+            await listenForAnswerContinuous()
+        } else {
+            await listenForAction()
+        }
+    }
+    
     func getExplanation(transcript: String) async {
         if Task.isCancelled { return }
         
@@ -3300,12 +3508,31 @@ struct ContentView: View {
                 stt.stop()
                 isListening = false
                 currentNetworkTask?.cancel()
+                // Check if it's an example request
+                let lower = q.lowercased()
+                let examplePhrases = [
+                    "give me an example", "give me an example usage", "show me an example", "example usage", "example"
+                ]
+                if examplePhrases.contains(where: { lower.contains($0) }) {
+                    currentNetworkTask = Task { await handleExampleRequest() }
+                    return
+                }
                 currentNetworkTask = Task { await askFollowUp(question: q) }
                 // askFollowUp will speak and then return to awaitingAction→listenForAction
                 return
 
             case .ambiguous:
                 let lower = utterance.lowercased()
+                // Check for "give me an example" phrases
+                let examplePhrases = [
+                    "give me an example", "give me an example usage", "show me an example", "example usage", "example"
+                ]
+                if examplePhrases.contains(where: { lower.contains($0) }) {
+                    stt.stop()
+                    isListening = false
+                    await handleExampleRequest()
+                    return
+                }
                 // Check for "read answer" phrases
                 if ["read answer","read the answer","show answer","tell me the answer"].contains(where: { lower.contains($0) }) {
                     stt.stop()

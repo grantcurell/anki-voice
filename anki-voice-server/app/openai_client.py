@@ -76,3 +76,24 @@ async def answer_followup(question_text: str, reference_text: str, user_question
 
     text = await _call_ollama_chat(system=system, user=user)
     return text or "I don't have an answer."
+
+
+async def get_example_in_spanish(question_text: str, reference_text: str) -> str:
+    """
+    Returns an example usage in Spanish based on the flashcard content.
+    The AI should respond entirely in Spanish.
+    """
+    system = (
+        "Eres un asistente que proporciona ejemplos de uso de palabras en español basados en tarjetas de estudio. "
+        "Siempre responde completamente en español. "
+        "Proporciona un ejemplo práctico y claro de cómo usar la palabra de la tarjeta. "
+        "Tu respuesta debe ser UNA oración. No más."
+    )
+    user = (
+        f"Frente de la tarjeta: {question_text}\n"
+        f"Reverso de la tarjeta (respuesta de referencia): {reference_text}\n"
+        "Proporciona un ejemplo de uso práctico en español que demuestre este concepto."
+    )
+
+    text = await _call_ollama_chat(system=system, user=user)
+    return text or "No puedo proporcionar un ejemplo en este momento."
