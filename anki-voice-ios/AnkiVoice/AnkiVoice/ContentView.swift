@@ -992,6 +992,7 @@ struct ContentView: View {
     @State private var deckNewCount: Int? = nil  // Number of new cards in selected deck
     @State private var deckReviewCount: Int? = nil  // Number of review cards in selected deck
     @State private var isLoadingDeckStats: Bool = false  // Loading state for deck stats
+    @State private var pendingDeleteIsSuspend: Bool = false  // True if user said "suspend"/"suspender"
     // AnkiWeb linking removed - using custom sync server with auto-generated credentials
     
     #if os(iOS)
@@ -2700,14 +2701,19 @@ struct ContentView: View {
                 break
             }
             
-            // 5) Delete note phrases (confirm before deleting)
+            // 5) Delete/suspend note phrases (confirm before suspending)
             let deleteNotePhrases = VoiceCommandPhrases.deleteNotePhrases(locale: inputLanguage)
             if deleteNotePhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
                 guard case .awaitingAnswer(let cid2, let front2, let back2) = state else { return }
                 state = .confirmingDelete(cardId: cid2, front: front2, back: back2)
-                await tts.speakAndWait(VoiceCommandPhrases.deleteConfirmPrompt(locale: inputLanguage))
+                let suspendPhrases = VoiceCommandPhrases.suspendPhrases(locale: inputLanguage)
+                pendingDeleteIsSuspend = suspendPhrases.contains(where: { lower.contains($0) })
+                let confirmPrompt = pendingDeleteIsSuspend
+                    ? VoiceCommandPhrases.suspendConfirmPrompt(locale: inputLanguage)
+                    : VoiceCommandPhrases.deleteConfirmPrompt(locale: inputLanguage)
+                await tts.speakAndWait(confirmPrompt)
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 await listenForDeleteConfirmation()
                 return
@@ -3859,11 +3865,14 @@ struct ContentView: View {
                 #if os(iOS)
                 await director.handle(.toTTS(stt))
                 #endif
-                await tts.speakAndWait(VoiceCommandPhrases.noteDeletedPrompt(locale: inputLanguage))
+                let successPrompt = pendingDeleteIsSuspend
+                    ? VoiceCommandPhrases.noteSuspendedPrompt(locale: inputLanguage)
+                    : VoiceCommandPhrases.noteDeletedPrompt(locale: inputLanguage)
+                await tts.speakAndWait(successPrompt)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await startReview() // Fetch next card
             } else {
-                tts.speak("Failed to delete note. Make sure Anki Desktop is running.")
+                tts.speak("Failed to suspend card. Make sure Anki Desktop is running.")
                 state = .awaitingAnswer(cardId: cid, front: front, back: back)
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 await listenForAnswerContinuous()

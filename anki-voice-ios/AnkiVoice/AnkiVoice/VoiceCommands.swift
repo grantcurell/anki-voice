@@ -45,10 +45,20 @@ enum VoiceCommandPhrases {
     static func deleteNotePhrases(locale: String) -> [String] {
         if isSpanish(locale) {
             return ["eliminar nota", "eliminar la nota", "borrar nota", "borrar la nota", "eliminar esta nota",
-                    "eliminar tarjeta", "eliminar la tarjeta", "borrar tarjeta", "borrar la tarjeta"]
+                    "eliminar tarjeta", "eliminar la tarjeta", "borrar tarjeta", "borrar la tarjeta",
+                    "suspender", "suspender la tarjeta", "suspender esta tarjeta", "suspender nota"]
         }
         return ["delete note", "delete the note", "remove note", "remove the note", "delete this note",
-                "delete card", "delete the card"]
+                "delete card", "delete the card",
+                "suspend", "suspend the card", "suspend this card", "suspend note"]
+    }
+
+    /// "Suspend" is a subset - when matched, use suspendConfirmPrompt instead of deleteConfirmPrompt
+    static func suspendPhrases(locale: String) -> [String] {
+        if isSpanish(locale) {
+            return ["suspender", "suspender la tarjeta", "suspender esta tarjeta", "suspender nota"]
+        }
+        return ["suspend", "suspend the card", "suspend this card", "suspend note"]
     }
     
     static func skipLLMPhrases(locale: String) -> [String] {
@@ -105,6 +115,13 @@ enum VoiceCommandPhrases {
         }
         return "Delete this note? Say confirm to delete, or say cancel."
     }
+
+    static func suspendConfirmPrompt(locale: String) -> String {
+        if isSpanish(locale) {
+            return "¿Suspender esta tarjeta? Di confirmar para suspender, o di cancelar."
+        }
+        return "Suspend this card? Say confirm to suspend, or say cancel."
+    }
     
     static func gradeConfirmPrompt(canonical: String, locale: String) -> String {
         if isSpanish(locale) {
@@ -139,6 +156,13 @@ enum VoiceCommandPhrases {
             return "Nota eliminada."
         }
         return "Note deleted."
+    }
+
+    static func noteSuspendedPrompt(locale: String) -> String {
+        if isSpanish(locale) {
+            return "Tarjeta suspendida."
+        }
+        return "Card suspended."
     }
     
     static func markedPrompt(canonical: String, locale: String) -> String {
