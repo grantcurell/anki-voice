@@ -3886,10 +3886,26 @@ struct ContentView: View {
     }
     
     func deleteNote(cardId: Int) async -> Bool {
-        guard let base = validatedBaseURL(),
-              let url = URL(string: "\(base)/delete-note") else {
+        guard let base = validatedBaseURL() else {
+            #if DEBUG
+            print("[DeleteNote] ❌ Invalid base URL")
+            #endif
             return false
         }
+        
+        // Determine endpoint path based on whether we're authenticated (production) or not (local dev)
+        let endpointPath = authService.isAuthenticated ? "/anki/delete-note" : "/delete-note"
+        guard let url = URL(string: "\(base)\(endpointPath)") else {
+            #if DEBUG
+            print("[DeleteNote] ❌ Failed to create URL from base: \(base), path: \(endpointPath)")
+            #endif
+            return false
+        }
+        
+        #if DEBUG
+        print("[DeleteNote] Request URL: \(url.absoluteString)")
+        print("[DeleteNote] CardId: \(cardId)")
+        #endif
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -3906,18 +3922,64 @@ struct ContentView: View {
         
         do {
             let (data, response) = try await session.data(for: req)
-            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                #if DEBUG
+                print("[DeleteNote] ❌ Invalid HTTP response")
+                #endif
+                return false
+            }
+            
+            #if DEBUG
+            print("[DeleteNote] HTTP Status: \(httpResponse.statusCode)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("[DeleteNote] Response body: \(responseString)")
+            }
+            #endif
             
             if httpResponse.statusCode == 200 {
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   json["error"] == nil || (json["error"] as? NSNull) != nil {
-                    return true
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    // AnkiConnect returns {"result": ..., "error": ...}
+                    // Success means error is null or doesn't exist
+                    let errorValue = json["error"]
+                    let hasError: Bool
+                    if errorValue == nil {
+                        hasError = false
+                    } else if errorValue is NSNull {
+                        hasError = false
+                    } else if let errorStr = errorValue as? String, errorStr.isEmpty {
+                        hasError = false
+                    } else {
+                        hasError = true
+                    }
+                    
+                    if !hasError {
+                        #if DEBUG
+                        print("[DeleteNote] ✅ Success - no error in response")
+                        print("[DeleteNote] Response result: \(json["result"] ?? "nil")")
+                        #endif
+                        return true
+                    } else {
+                        #if DEBUG
+                        print("[DeleteNote] ❌ Error in response: \(errorValue ?? "unknown")")
+                        #endif
+                    }
+                } else {
+                    #if DEBUG
+                    print("[DeleteNote] ❌ Failed to parse JSON response")
+                    #endif
                 }
+            } else {
+                #if DEBUG
+                print("[DeleteNote] ❌ HTTP status code: \(httpResponse.statusCode)")
+                if let errorString = String(data: data, encoding: .utf8) {
+                    print("[DeleteNote] Error response body: \(errorString)")
+                }
+                #endif
             }
             return false
         } catch {
             #if DEBUG
-            print("[DeleteNote] Error: \(error)")
+            print("[DeleteNote] ❌ Exception: \(error)")
             #endif
             return false
         }
