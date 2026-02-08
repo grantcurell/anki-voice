@@ -3886,18 +3886,10 @@ struct ContentView: View {
     }
     
     func deleteNote(cardId: Int) async -> Bool {
-        guard let base = validatedBaseURL() else {
+        guard let base = validatedBaseURL(),
+              let url = URL(string: "\(base)/delete-note") else {
             #if DEBUG
-            print("[DeleteNote] ❌ Invalid base URL")
-            #endif
-            return false
-        }
-        
-        // Determine endpoint path based on whether we're authenticated (production) or not (local dev)
-        let endpointPath = authService.isAuthenticated ? "/anki/delete-note" : "/delete-note"
-        guard let url = URL(string: "\(base)\(endpointPath)") else {
-            #if DEBUG
-            print("[DeleteNote] ❌ Failed to create URL from base: \(base), path: \(endpointPath)")
+            print("[DeleteNote] ❌ Invalid base URL or failed to create URL")
             #endif
             return false
         }
