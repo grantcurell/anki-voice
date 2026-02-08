@@ -2713,7 +2713,7 @@ struct ContentView: View {
                 let confirmPrompt = pendingDeleteIsSuspend
                     ? VoiceCommandPhrases.suspendConfirmPrompt(locale: inputLanguage)
                     : VoiceCommandPhrases.deleteConfirmPrompt(locale: inputLanguage)
-                await tts.speakAndWait(confirmPrompt)
+                await tts.speakAndWait(confirmPrompt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 await listenForDeleteConfirmation()
                 return
@@ -2881,7 +2881,7 @@ struct ContentView: View {
             // Cancel deletion confirmation; return to answer phase
             stopForTransition(true)
             state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await tts.speakAndWait("Cancelled.")
+            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage), language: inputLanguage)
             try? await Task.sleep(nanoseconds: 200_000_000)
             await listenForAnswerContinuous()
         }
@@ -3628,7 +3628,7 @@ struct ContentView: View {
                     stt.stop()
                     isListening = false
                     state = .confirmingGrade(cardId: cid, ease: ease, front: front, back: back)
-                    await tts.speakAndWait(VoiceCommandPhrases.gradeConfirmPrompt(canonical: canonical, locale: inputLanguage))
+                    await tts.speakAndWait(VoiceCommandPhrases.gradeConfirmPrompt(canonical: canonical, locale: inputLanguage), language: inputLanguage)
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     await listenForConfirmation()
                     return
@@ -3681,7 +3681,7 @@ struct ContentView: View {
                 // Neither read answer nor undo - prompt to try again
                 stt.stop()
                 isListening = false
-                await tts.speakAndWait(VoiceCommandPhrases.didntGetThatPrompt(locale: inputLanguage))
+                await tts.speakAndWait(VoiceCommandPhrases.didntGetThatPrompt(locale: inputLanguage), language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 isListening = true
                 #if os(iOS)
@@ -3779,7 +3779,7 @@ struct ContentView: View {
             }
         } else {
             state = .awaitingAction(cardId: cid, front: front, back: back)
-            await tts.speakAndWait(VoiceCommandPhrases.sayGradeOrQuestionPrompt(locale: inputLanguage))
+            await tts.speakAndWait(VoiceCommandPhrases.sayGradeOrQuestionPrompt(locale: inputLanguage), language: inputLanguage)
             try? await Task.sleep(nanoseconds: 150_000_000)
             await listenForAction()
         }
@@ -3845,7 +3845,7 @@ struct ContentView: View {
         if cancelled {
             guard case .confirmingDelete(let cid, let front, let back) = state else { return }
             state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage))
+            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage), language: inputLanguage)
             try? await Task.sleep(nanoseconds: 200_000_000)
             await listenForAnswerContinuous()
             return
@@ -3868,7 +3868,7 @@ struct ContentView: View {
                 let successPrompt = pendingDeleteIsSuspend
                     ? VoiceCommandPhrases.noteSuspendedPrompt(locale: inputLanguage)
                     : VoiceCommandPhrases.noteDeletedPrompt(locale: inputLanguage)
-                await tts.speakAndWait(successPrompt)
+                await tts.speakAndWait(successPrompt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await startReview() // Fetch next card
             } else {
@@ -3879,7 +3879,7 @@ struct ContentView: View {
             }
         } else {
             state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage))
+            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage), language: inputLanguage)
             try? await Task.sleep(nanoseconds: 200_000_000)
             await listenForAnswerContinuous()
         }
