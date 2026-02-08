@@ -543,6 +543,19 @@ final class SpeechTTS: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
 }
 
+/// Supported input languages for speech recognition
+enum InputLanguage: String, CaseIterable {
+    case english = "en-US"
+    case spanish = "es-ES"
+    
+    var displayName: String {
+        switch self {
+        case .english: return "English"
+        case .spanish: return "Spanish"
+        }
+    }
+}
+
 @MainActor
 final class SpeechSTT: NSObject, ObservableObject {
     enum Gate { case open, closed }
@@ -551,7 +564,13 @@ final class SpeechSTT: NSObject, ObservableObject {
     weak var director: AudioDirector?
     #endif
     
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    /// Locale for speech recognition. Changing this affects the next recognition start.
+    @Published var inputLocaleIdentifier: String = "en-US"
+    
+    /// Returns recognizer for current input locale (created fresh each call)
+    private var recognizer: SFSpeechRecognizer? {
+        SFSpeechRecognizer(locale: Locale(identifier: inputLocaleIdentifier))
+    }
     #if os(iOS)
     private let session = AVAudioSession.sharedInstance()
     private var routeChangeObs: NSObjectProtocol?
@@ -945,6 +964,7 @@ final class SpeechSTT: NSObject, ObservableObject {
 struct ContentView: View {
     @AppStorage("serverBaseURL") private var server = productionAPIURL
     @AppStorage("didRequestMicOnce") private var didRequestMicOnce = false
+    @AppStorage("inputLanguage") private var inputLanguage = "en-US"
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var authService = AuthService.shared
     @State private var current: CurrentCard?
@@ -1228,6 +1248,25 @@ struct ContentView: View {
                     .cornerRadius(10)
                     .disabled(isSyncing)
                 }
+                
+                // Input language dropdown (speech recognition language)
+                if case .idle = state {
+                    HStack {
+                        Text("Input language:")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Picker("Input language", selection: $inputLanguage) {
+                            ForEach(InputLanguage.allCases, id: \.rawValue) { lang in
+                                Text(lang.displayName).tag(lang.rawValue)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .onChange(of: inputLanguage) { _, newValue in
+                            stt.inputLocaleIdentifier = newValue
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
 
                 // Card displaying current prompt/answer
                 if !displayText.isEmpty {
@@ -1320,6 +1359,9 @@ struct ContentView: View {
             AuthSheet(authService: authService)
         }
         .onAppear {
+            // Sync persisted input language to speech recognizer
+            stt.inputLocaleIdentifier = inputLanguage
+            
             // Check authorization status on app startup
             checkAuthorizationStatus()
             
@@ -1455,9 +1497,9 @@ struct ContentView: View {
         }
     }
 
-    // Helper for consistent voice feedback after grading
+    // Helper for consistent voice feedback after grading (language-aware)
     private func undoPrompt() -> String {
-        return "Say 'undo' to change it."
+        VoiceCommandPhrases.undoPrompt(locale: inputLanguage)
     }
     
     // Rate-limited error speaking (avoid spam in Release)
@@ -2589,9 +2631,7 @@ struct ContentView: View {
             let lower = transcript.lowercased()
             
             // 1) Reread Question phrases (stay in answer phase, just reread the question)
-            let rereadQuestionPhrases = [
-                "reread question", "reread the question", "say the question again", "read question again", "repeat question", "repeat the question"
-            ]
+            let rereadQuestionPhrases = VoiceCommandPhrases.rereadQuestionPhrases(locale: inputLanguage)
             if rereadQuestionPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
@@ -2600,9 +2640,7 @@ struct ContentView: View {
             }
             
             // 2) Reread Answer phrases (stay in answer phase, just reread)
-            let rereadAnswerPhrases = [
-                "reread answer", "reread the answer", "say the answer again", "read answer again"
-            ]
+            let rereadAnswerPhrases = VoiceCommandPhrases.rereadAnswerPhrases(locale: inputLanguage)
             if rereadAnswerPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
@@ -2610,10 +2648,8 @@ struct ContentView: View {
                 return
             }
             
-            // 2.5) Give me an example phrases (request example in Spanish)
-            let examplePhrases = [
-                "give me an example", "give me an example usage", "show me an example", "example usage", "example"
-            ]
+            // 2.5) Give me an example phrases (request example)
+            let examplePhrases = VoiceCommandPhrases.examplePhrases(locale: inputLanguage)
             if examplePhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
@@ -2622,9 +2658,7 @@ struct ContentView: View {
             }
             
             // 3) Read Answer phrases (skip LLM, read back and go to action phase)
-            let readAnswerPhrases = [
-                "read answer", "read the answer", "show answer", "tell me the answer"
-            ]
+            let readAnswerPhrases = VoiceCommandPhrases.readAnswerPhrases(locale: inputLanguage)
             if readAnswerPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
@@ -2633,7 +2667,7 @@ struct ContentView: View {
             }
             
             // 4) Immediate grade phrases (skip LLM, submit grade)
-            switch IntentParser.parse(lower) {
+            switch IntentParser.parse(lower, localeIdentifier: inputLanguage) {
             case .grade(let ease, let canonical, let unambiguous) where unambiguous:
                 // We are in .awaitingAnswer; grade and advance immediately
                 stt.stop()
@@ -2652,7 +2686,7 @@ struct ContentView: View {
                     #if os(iOS)
                     await director.handle(.toTTS(stt))
                     #endif
-                    await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
+                    await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: canonical, locale: inputLanguage))
                     try? await Task.sleep(nanoseconds: 80_000_000)
                     await advanceToNextCard(previousCardId: cid2)
                 } else {
@@ -2667,22 +2701,20 @@ struct ContentView: View {
             }
             
             // 5) Delete note phrases (confirm before deleting)
-            let deleteNotePhrases = [
-                "delete note", "delete the note", "remove note", "remove the note", "delete this note", "delete card", "delete the card"
-            ]
+            let deleteNotePhrases = VoiceCommandPhrases.deleteNotePhrases(locale: inputLanguage)
             if deleteNotePhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
                 guard case .awaitingAnswer(let cid2, let front2, let back2) = state else { return }
                 state = .confirmingDelete(cardId: cid2, front: front2, back: back2)
-                await tts.speakAndWait("Delete this note? Say confirm to delete, or say cancel.")
+                await tts.speakAndWait(VoiceCommandPhrases.deleteConfirmPrompt(locale: inputLanguage))
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 await listenForDeleteConfirmation()
                 return
             }
             
             // 6) "I don't know" flow (skip LLM, read back)
-            let skipLLMPhrases = ["i don't know", "i have no idea", "i'm not sure", "no idea", "don't know", "i dunno"]
+            let skipLLMPhrases = VoiceCommandPhrases.skipLLMPhrases(locale: inputLanguage)
             if skipLLMPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
@@ -2697,7 +2729,7 @@ struct ContentView: View {
             }
             
             // 7) Undo phrases (undo last grade and go back to previous card)
-            let undoPhrases = ["undo", "change", "take back", "undo that", "change that"]
+            let undoPhrases = VoiceCommandPhrases.undoPhrases(locale: inputLanguage)
             if undoPhrases.contains(where: { lower.contains($0) }) {
                 stt.stop()
                 isListening = false
@@ -3554,7 +3586,7 @@ struct ContentView: View {
             print("[Action] utterance: '\(utterance)'")
             #endif
 
-            switch IntentParser.parse(utterance) {
+            switch IntentParser.parse(utterance, localeIdentifier: inputLanguage) {
             case .grade(let ease, let canonical, let unambiguous):
                 guard case .awaitingAction(let cid, let front, let back) = state else { return }
                 if unambiguous {
@@ -3565,7 +3597,7 @@ struct ContentView: View {
                         #if os(iOS)
                         await director.handle(.toTTS(stt))
                         #endif
-                        await tts.speakAndWait("Marked \(canonical). \(undoPrompt())")
+                        await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: canonical, locale: inputLanguage))
                         try? await Task.sleep(nanoseconds: 80_000_000)
                         await advanceToNextCard(previousCardId: cid)
                         return
@@ -3586,7 +3618,7 @@ struct ContentView: View {
                     stt.stop()
                     isListening = false
                     state = .confirmingGrade(cardId: cid, ease: ease, front: front, back: back)
-                    await tts.speakAndWait("Mark \(canonical)? Say confirm to proceed, or say a different grade.")
+                    await tts.speakAndWait(VoiceCommandPhrases.gradeConfirmPrompt(canonical: canonical, locale: inputLanguage))
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     await listenForConfirmation()
                     return
@@ -3622,30 +3654,30 @@ struct ContentView: View {
                     return
                 }
                 // Check for "read answer" phrases
-                if ["read answer","read the answer","show answer","tell me the answer"].contains(where: { lower.contains($0) }) {
+                let readAnswerPhrases = VoiceCommandPhrases.readAnswerPhrases(locale: inputLanguage)
+                if readAnswerPhrases.contains(where: { lower.contains($0) }) {
                     stt.stop()
                     isListening = false
                     await handleReadAnswer()
                     return
-                } else if lower.contains("undo") || lower.contains("change") || lower.contains("take back") {
+                }
+                let undoPhrases = VoiceCommandPhrases.undoPhrases(locale: inputLanguage)
+                if undoPhrases.contains(where: { lower.contains($0) }) {
                     stt.stop()
                     isListening = false
                     await undoLastGrade()
-                    // undo will call startReview(); exit this loop
                     return
-                } else {
-                    stt.stop()
-                    isListening = false
-                    await tts.speakAndWait("I didn't get that. Say a grade like 'grade good' or ask a question.")
-                     // After TTS, restart listening; do not deactivate session
-                     try? await Task.sleep(nanoseconds: 150_000_000)
-                     isListening = true
-                     #if os(iOS)
-                     // Director handles STT configuration - just restart recognition
-                     await director.handle(.assertSTTRunning(stt))
-                     #endif
-                    continue
                 }
+                // Neither read answer nor undo - prompt to try again
+                stt.stop()
+                isListening = false
+                await tts.speakAndWait(VoiceCommandPhrases.didntGetThatPrompt(locale: inputLanguage))
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                isListening = true
+                #if os(iOS)
+                await director.handle(.assertSTTRunning(stt))
+                #endif
+                continue
             }
         }
     }
@@ -3702,10 +3734,10 @@ struct ContentView: View {
         // Don't deactivate session here - keep it active for smooth transitions
 
         let utter = stt.transcript.lowercased()
-        let confirmed = utter.contains("confirm") || utter.contains("yes") || utter.contains("do it") ||
-                        utter.contains("that's fine") || utter.contains("okay") || utter.contains("ok")
-        let cancelled = utter.contains("no") || utter.contains("cancel") || utter.contains("wait") ||
-                        utter.contains("hold on") || utter.contains("change")
+        let confirmPhrases = VoiceCommandPhrases.confirmPhrases(locale: inputLanguage)
+        let cancelPhrases = VoiceCommandPhrases.cancelPhrases(locale: inputLanguage)
+        let confirmed = confirmPhrases.contains { utter.contains($0) }
+        let cancelled = cancelPhrases.contains { utter.contains($0) }
 
         if cancelled {
             guard case .confirmingGrade(let cid, _, let front, let back) = state else { return }
@@ -3737,7 +3769,7 @@ struct ContentView: View {
             }
         } else {
             state = .awaitingAction(cardId: cid, front: front, back: back)
-            await tts.speakAndWait("Okay. Say a grade or ask a question.")
+            await tts.speakAndWait(VoiceCommandPhrases.sayGradeOrQuestionPrompt(locale: inputLanguage))
             try? await Task.sleep(nanoseconds: 150_000_000)
             await listenForAction()
         }
@@ -3795,15 +3827,15 @@ struct ContentView: View {
         // Don't deactivate session here - keep it active for smooth transitions
 
         let utter = stt.transcript.lowercased()
-        let confirmed = utter.contains("confirm") || utter.contains("yes") || utter.contains("do it") ||
-                        utter.contains("that's fine") || utter.contains("okay") || utter.contains("ok")
-        let cancelled = utter.contains("no") || utter.contains("cancel") || utter.contains("wait") ||
-                        utter.contains("hold on") || utter.contains("change")
+        let confirmPhrases = VoiceCommandPhrases.confirmPhrases(locale: inputLanguage)
+        let cancelPhrases = VoiceCommandPhrases.cancelPhrases(locale: inputLanguage)
+        let confirmed = confirmPhrases.contains { utter.contains($0) }
+        let cancelled = cancelPhrases.contains { utter.contains($0) }
 
         if cancelled {
             guard case .confirmingDelete(let cid, let front, let back) = state else { return }
             state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await tts.speakAndWait("Okay. Cancelled.")
+            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage))
             try? await Task.sleep(nanoseconds: 200_000_000)
             await listenForAnswerContinuous()
             return
@@ -3823,7 +3855,7 @@ struct ContentView: View {
                 #if os(iOS)
                 await director.handle(.toTTS(stt))
                 #endif
-                await tts.speakAndWait("Note deleted.")
+                await tts.speakAndWait(VoiceCommandPhrases.noteDeletedPrompt(locale: inputLanguage))
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await startReview() // Fetch next card
             } else {
@@ -3834,7 +3866,7 @@ struct ContentView: View {
             }
         } else {
             state = .awaitingAnswer(cardId: cid, front: front, back: back)
-            await tts.speakAndWait("Okay. Cancelled.")
+            await tts.speakAndWait(VoiceCommandPhrases.cancelledPrompt(locale: inputLanguage))
             try? await Task.sleep(nanoseconds: 200_000_000)
             await listenForAnswerContinuous()
         }
@@ -4133,12 +4165,7 @@ struct ContentView: View {
     }
 
     func canonicalName(_ ease: Int) -> String {
-        switch ease {
-        case 1: return "again"
-        case 2: return "hard"
-        case 3: return "good"
-        default: return "easy"
-        }
+        VoiceCommandPhrases.canonicalName(ease: ease, locale: inputLanguage)
     }
     
     // Ensure Anki reviewer is showing the answer before we send a grade.

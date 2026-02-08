@@ -15,40 +15,59 @@ enum UserIntent {
 
 struct IntentParser {
 
-    // Precompiled regexes
-    private static let numberWords: [String:Int] = [
+    // English dictionaries
+    private static let numberWordsEN: [String:Int] = [
         "one":1, "two":2, "three":3, "four":4
     ]
+    private static let numberWordsES: [String:Int] = [
+        "uno":1, "dos":2, "tres":3, "cuatro":4
+    ]
 
-    private static let gradeWords: [String:Int] = [
-        // canonical mapping
-        "again":1, "wrong":1, "repeat":1, "fail":1, "failed":1, "miss":1, "missed":1, "red":1, // include some colloquials
-
+    private static let gradeWordsEN: [String:Int] = [
+        "again":1, "wrong":1, "repeat":1, "fail":1, "failed":1, "miss":1, "missed":1, "red":1,
         "hard":2, "difficult":2, "struggled":2,
-
         "good":3, "ok":3, "okay":3, "okey":3, "decent":3, "solid":3, "correct":3,
-
         "easy":4, "trivial":4, "simple":4
     ]
-
-    private static let gradeVerbs = [
-        "grade", "mark", "set", "make", "give", "record", "submit"
+    private static let gradeWordsES: [String:Int] = [
+        "otra vez":1, "repetir":1, "mal":1, "fallar":1, "fallé":1, "errar":1, "equivocado":1,
+        "difícil":2, "duro":2, "costó":2,
+        "bien":3, "bueno":3, "ok":3, "okay":3, "decente":3, "correcto":3,
+        "fácil":4, "trivial":4, "simple":4
     ]
 
-    private static let questionStarters = [
+    private static let gradeVerbsEN = [
+        "grade", "mark", "set", "make", "give", "record", "submit"
+    ]
+    private static let gradeVerbsES = [
+        "calificar", "marcar", "poner", "dar", "registrar", "enviar"
+    ]
+
+    private static let questionStartersEN = [
         "what","why","how","when","where","who","which",
         "explain","clarify","tell me","give me","compare","example","more about",
         "can you","could you","do you","would you","help me","walk me through","i don't understand","i dont understand","not clear"
     ]
+    private static let questionStartersES = [
+        "qué","que","por qué","porque","cómo","como","cuándo","cuando","dónde","donde","quién","quien","cuál","cual",
+        "explicar","explica","aclarar","aclara","dime","dame","compara","ejemplo","más sobre","mas sobre",
+        "puedes","podrías","me ayudas","no entiendo","no está claro","no esta claro"
+    ]
 
+    /// Parse with default English locale (for backward compatibility)
     static func parse(_ raw: String) -> UserIntent {
-        let text = normalize(raw)
+        parse(raw, localeIdentifier: "en-US")
+    }
 
-        if let g = matchGrade(text) {
+    static func parse(_ raw: String, localeIdentifier: String) -> UserIntent {
+        let text = normalize(raw)
+        let isSpanish = VoiceCommandPhrases.isSpanish(localeIdentifier)
+
+        if let g = matchGrade(text, isSpanish: isSpanish) {
             return g
         }
 
-        if looksLikeQuestion(text) {
+        if looksLikeQuestion(text, isSpanish: isSpanish) {
             return .question(text: raw.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
@@ -70,81 +89,79 @@ struct IntentParser {
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func matchGrade(_ t: String) -> UserIntent? {
+    private static func matchGrade(_ t: String, isSpanish: Bool) -> UserIntent? {
         var isUnambiguous = false
-        
+        let gradeWords = isSpanish ? gradeWordsES : gradeWordsEN
+        let gradeVerbs = isSpanish ? gradeVerbsES : gradeVerbsEN
+
         // 1) explicit numerals - always unambiguous ("grade 3", "mark 2")
-        if let n = extractExplicitNumberCommand(t) {
+        if let n = extractExplicitNumberCommand(t, gradeVerbs: gradeVerbs) {
             if let mapped = mapEase(n) {
                 isUnambiguous = true
-                return .grade(ease: mapped, canonical: canonicalName(mapped), unambiguous: isUnambiguous)
+                return .grade(ease: mapped, canonical: VoiceCommandPhrases.canonicalName(ease: mapped, locale: isSpanish ? "es-ES" : "en-US"), unambiguous: isUnambiguous)
             }
         }
 
-        // 2) words "one/two/three/four" - unambiguous when with verb ("grade one")
-        if let n = extractWordNumberCommand(t) {
+        // 2) words "one/two/three/four" or "uno/dos/tres/cuatro" - unambiguous when with verb
+        if let n = extractWordNumberCommand(t, isSpanish: isSpanish) {
             if let mapped = mapEase(n) {
-                // Check if it's a command (has grade verb) vs just the word
                 let hasVerb = gradeVerbs.contains { t.contains($0) }
-                isUnambiguous = hasVerb || t.split(separator: " ").count == 1 // bare number word is clear
-                return .grade(ease: mapped, canonical: canonicalName(mapped), unambiguous: isUnambiguous)
+                isUnambiguous = hasVerb || t.split(separator: " ").count == 1
+                return .grade(ease: mapped, canonical: VoiceCommandPhrases.canonicalName(ease: mapped, locale: isSpanish ? "es-ES" : "en-US"), unambiguous: isUnambiguous)
             }
         }
 
         // 3) bare grade words or "mark it X", "grade X", etc.
-        if let e = extractWordGrade(t) {
-            // Unambiguous if: exact match, starts with verb, or single word
+        if let e = extractWordGrade(t, gradeWords: gradeWords, gradeVerbs: gradeVerbs) {
+            let canonical = VoiceCommandPhrases.canonicalName(ease: e, locale: isSpanish ? "es-ES" : "en-US")
             let tokens = t.split(separator: " ").map(String.init)
-            let canonical = canonicalName(e)
-            let isExact = t == canonical || t == "grade \(canonical)" || t == "mark \(canonical)"
+            let exactPatterns = isSpanish ? ["calificar \(canonical)", "marcar \(canonical)"] : ["grade \(canonical)", "mark \(canonical)"]
+            let isExact = t == canonical || exactPatterns.contains(t)
             let hasVerb = gradeVerbs.contains { t.contains($0) && t.contains(canonical) }
             isUnambiguous = isExact || hasVerb || tokens.count <= 2
-            
-            // Ambiguous: "that was good", "pretty easy", "kind of hard"
-            if t.contains("was") || t.contains("pretty") || t.contains("kind of") || t.contains("sort of") {
+
+            // Ambiguous: "that was good", "pretty easy", "kind of hard" / "eso estuvo bien", "bastante fácil"
+            if t.contains("was") || t.contains("pretty") || t.contains("kind of") || t.contains("sort of") ||
+               t.contains("estuvo") || t.contains("bastante") || t.contains("un poco") {
                 isUnambiguous = false
             }
-            
+
             return .grade(ease: e, canonical: canonical, unambiguous: isUnambiguous)
         }
 
         return nil
     }
 
-    private static func extractExplicitNumberCommand(_ t: String) -> Int? {
-        // Matches: "grade 3", "grade it 2", "mark 4", "give it 1", "set to 3", "make it 2"
-        // Also accept bare: "3", "grade three" handled elsewhere
+    private static func extractExplicitNumberCommand(_ t: String, gradeVerbs: [String]) -> Int? {
         let tokens = t.split(separator: " ").map(String.init)
 
-        // bare single digit
         if tokens.count == 1, let d = Int(tokens[0]), (1...4).contains(d) {
             return d
         }
 
-        // verb + optional "it/as/to" + number
         for v in gradeVerbs {
             if t.contains(v + " ") {
                 if let d = extractTrailingDigit(t) { return d }
             }
         }
 
-        // "give it a 3"
-        if let d = matchRegex(t, pattern: #"(?:give|mark|set|make|grade)[^\d]*(\d)"#) {
+        if let d = matchRegex(t, pattern: #"(?:give|mark|set|make|grade|calificar|marcar|dar|poner)[^\d]*(\d)"#) {
             if let n = Int(d), (1...4).contains(n) { return n }
         }
 
         return nil
     }
 
-    private static func extractWordNumberCommand(_ t: String) -> Int? {
-        // "grade three", "mark it two", bare "four"
+    private static func extractWordNumberCommand(_ t: String, isSpanish: Bool) -> Int? {
+        let numberWords = isSpanish ? numberWordsES : numberWordsEN
+        let gradeVerbs = isSpanish ? gradeVerbsES : gradeVerbsEN
         let tokens = t.split(separator: " ").map(String.init)
+
         if tokens.count == 1, let n = numberWords[tokens[0]] {
             return n
         }
-        for (w,n) in numberWords {
+        for (w, n) in numberWords {
             if t.contains(" \(w)") || t.hasPrefix(w) {
-                // ensure it's tied to a grade verb or obvious intent
                 for v in gradeVerbs {
                     if t.contains(v) { return n }
                 }
@@ -153,8 +170,7 @@ struct IntentParser {
         return nil
     }
 
-    private static func extractWordGrade(_ t: String) -> Int? {
-        // bare "again/hard/good/easy" or with verbs "mark it good"
+    private static func extractWordGrade(_ t: String, gradeWords: [String: Int], gradeVerbs: [String]) -> Int? {
         var foundEase: Int?
 
         for (w, e) in gradeWords {
@@ -164,7 +180,6 @@ struct IntentParser {
             }
         }
         if foundEase == nil {
-            // verb + canonical
             for v in gradeVerbs {
                 if t.contains(v + " ") {
                     for (w, e) in gradeWords {
@@ -179,16 +194,23 @@ struct IntentParser {
         return foundEase
     }
 
-    private static func looksLikeQuestion(_ t: String) -> Bool {
+    private static func looksLikeQuestion(_ t: String, isSpanish: Bool) -> Bool {
         if t.contains("?") { return true }
+        let questionStarters = isSpanish ? questionStartersES : questionStartersEN
         for q in questionStarters {
             if t == q { return true }
             if t.hasPrefix(q + " ") { return true }
         }
-        // common stems
-        if t.contains("explain") || t.contains("don't understand") || t.contains("dont understand") ||
-           t.contains("not clear") || t.contains("what does") || t.contains("more about") {
-            return true
+        if isSpanish {
+            if t.contains("explicar") || t.contains("explica") || t.contains("no entiendo") ||
+               t.contains("no está claro") || t.contains("qué significa") || t.contains("más sobre") {
+                return true
+            }
+        } else {
+            if t.contains("explain") || t.contains("don't understand") || t.contains("dont understand") ||
+               t.contains("not clear") || t.contains("what does") || t.contains("more about") {
+                return true
+            }
         }
         return false
     }
@@ -212,15 +234,6 @@ struct IntentParser {
 
     private static func mapEase(_ n: Int) -> Int? {
         return (1...4).contains(n) ? n : nil
-    }
-
-    private static func canonicalName(_ ease: Int) -> String {
-        switch ease {
-        case 1: return "again"
-        case 2: return "hard"
-        case 3: return "good"
-        default: return "easy"
-        }
     }
 }
 

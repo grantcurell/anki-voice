@@ -2363,6 +2363,36 @@ pip install -r requirements.txt
 
 ---
 
+## 🎛️ Input Language Selection
+
+The app supports selecting the **input language** for speech recognition on the home page. When you choose Spanish, both speech recognition and all voice commands use Spanish.
+
+**Location**: Home page, below the Sync button (dropdown labeled "Input language")
+
+**Options**:
+- **English** (`en-US`) - Default; speech recognition and commands in English
+- **Spanish** (`es-ES`) - Speech recognition and commands in Spanish
+
+**How it works**:
+- **Speech recognition**: `SFSpeechRecognizer` uses the selected locale to transcribe your spoken answers
+- **Voice commands**: All command phrases (grades, "read answer", "undo", etc.) are matched in the selected language
+- **TTS prompts**: Feedback prompts ("Marked good. Say 'undo' to change it") are spoken in the selected language
+- **Persistence**: Selection is stored in `UserDefaults` via `@AppStorage("inputLanguage")`
+
+**Implementation**:
+- `VoiceCommands.swift` - Centralized phrase sets and TTS prompts per language
+- `IntentParser.swift` - Accepts `localeIdentifier`; uses Spanish grade words, verbs, and question starters when `es-ES`
+- `SpeechSTT` - `inputLocaleIdentifier` property; recognizer created with selected locale
+
+**Spanish command examples**:
+- Grades: `"bien"`, `"bueno"`, `"difícil"`, `"fácil"`, `"otra vez"`, `"calificar 3"`, `"marcar bien"`
+- Read answer: `"lee la respuesta"`, `"dime la respuesta"`
+- Undo: `"deshacer"`, `"cambiar"`
+- I don't know: `"no sé"`, `"no tengo idea"`
+- Delete note: `"eliminar nota"`, `"borrar tarjeta"`
+
+---
+
 ## 🎤 Complete Voice Commands Reference
 
 ### Commands During Answer Phase
@@ -2454,6 +2484,12 @@ After the explanation is read, you can use these commands:
 - Bare grade words: `"good"`, `"hard"` → unambiguous if single word or with verb
 - Ambiguous phrases: `"that was good"`, `"pretty easy"` → requires confirmation
 
+**Spanish equivalents** (when Input Language is Spanish):
+- Ease 1: `"otra vez"`, `"repetir"`, `"mal"`, `"equivocado"`; `"calificar 1"`, `"marcar uno"`
+- Ease 2: `"difícil"`, `"duro"`; `"calificar 2"`, `"marcar dos"`
+- Ease 3: `"bien"`, `"bueno"`, `"correcto"`; `"calificar 3"`, `"marcar tres"`
+- Ease 4: `"fácil"`, `"simple"`; `"calificar 4"`, `"marcar cuatro"`
+
 ## 🌍 Multilingual TTS Implementation
 
 ### README Div Extraction
@@ -2529,6 +2565,7 @@ Language is determined by the `lang` attribute in README divs:
 ### Home Screen (Idle State)
 
 - **Server URL Text Field**: Enter Mac's IP address (e.g., `http://192.168.1.50:8000`) - **Only shown in development mode when not authenticated**
+- **Input Language Dropdown**: Select English or Spanish for speech recognition and voice commands (below Sync button)
 - **Authorize Speech & Mic Button**: Requests permissions (only shown if not granted)
 - **Open Settings Button**: Opens iPhone Settings (shown if permissions denied)
 - **Deck Selection Dropdown**: Select which deck to review (loads via `/decks` endpoint)
@@ -2585,8 +2622,43 @@ Language is determined by the `lang` attribute in README divs:
 
 **Impact**: The iOS app now correctly receives card data when cards are available, eliminating false "no cards available" errors.
 
+### Input Language and Spanish Voice Commands (February 2025)
+
+**Feature**: Added user-selectable input language (English/Spanish) for speech recognition and voice commands.
+
+**What was added**:
+1. **Input language dropdown** on home page (below Sync button)
+   - Chooses speech recognition locale (`en-US` or `es-ES`)
+   - Persisted via `@AppStorage("inputLanguage")`
+
+2. **VoiceCommands.swift** - New file with language-aware phrase sets:
+   - Command phrases: reread question/answer, read answer, delete note, I don't know, undo, example
+   - Confirm/cancel phrases for confirmation flows
+   - TTS prompts: undo prompt, delete confirm, grade confirm, "didn't get that", cancelled, note deleted
+
+3. **IntentParser** - Spanish support:
+   - `parse(_ raw: String, localeIdentifier: String)` overload
+   - Spanish grade words (bien, bueno, difícil, fácil, otra vez)
+   - Spanish grade verbs (calificar, marcar, poner, dar)
+   - Spanish number words (uno, dos, tres, cuatro)
+   - Spanish question starters (qué, por qué, cómo, explicar, etc.)
+
+4. **SpeechSTT** - Dynamic locale:
+   - `@Published var inputLocaleIdentifier`
+   - Recognizer created with selected locale (computed property)
+
+5. **ContentView** - All phrase matching and TTS prompts use `VoiceCommandPhrases.xxx(locale: inputLanguage)`
+   - `listenForAnswerContinuous`, `listenForAction` use language-aware phrases
+   - `listenForConfirmation`, `listenForDeleteConfirmation` use confirm/cancel phrases
+   - Grade feedback, undo prompt, etc. use `VoiceCommandPhrases`
+
+**Files Changed**:
+- `anki-voice-ios/AnkiVoice/AnkiVoice/ContentView.swift` - Input language UI, phrase lookups, TTS prompts
+- `anki-voice-ios/AnkiVoice/AnkiVoice/IntentParser.swift` - Locale-aware parse, Spanish dictionaries
+- `anki-voice-ios/AnkiVoice/AnkiVoice/VoiceCommands.swift` - New file
+
 ---
 
-**Last Updated**: 2024-11-16
+**Last Updated**: 2025-02-08
 
 **Remember**: This system preserves Anki's sophisticated scheduling algorithm while adding voice interaction. The core learning benefits remain unchanged - we're just changing the interface from visual/manual to voice-driven.
