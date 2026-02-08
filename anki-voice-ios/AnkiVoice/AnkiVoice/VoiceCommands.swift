@@ -165,6 +165,20 @@ enum VoiceCommandPhrases {
         return "Card suspended."
     }
     
+    static func suspendFailedPrompt(locale: String) -> String {
+        if isSpanish(locale) {
+            return "No se pudo suspender la tarjeta. Verifica que el servidor esté funcionando."
+        }
+        return "Failed to suspend card. Make sure the server is running."
+    }
+    
+    static func deleteFailedPrompt(locale: String) -> String {
+        if isSpanish(locale) {
+            return "No se pudo eliminar la nota. Verifica que el servidor esté funcionando."
+        }
+        return "Failed to delete note. Make sure the server is running."
+    }
+    
     static func markedPrompt(canonical: String, locale: String) -> String {
         if isSpanish(locale) {
             return "Marcado \(canonical). \(undoPrompt(locale: locale))"

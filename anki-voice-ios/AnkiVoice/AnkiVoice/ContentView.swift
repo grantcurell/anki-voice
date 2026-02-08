@@ -1991,7 +1991,7 @@ struct ContentView: View {
         case .explaining: return "Explaining"
         case .awaitingAction: return "Awaiting Action"
         case .confirmingGrade: return "Confirming Grade"
-        case .confirmingDelete: return "Confirming Delete"
+        case .confirmingDelete: return pendingDeleteIsSuspend ? "Confirming Suspend" : "Confirming Delete"
         }
     }
     
@@ -3872,7 +3872,11 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await startReview() // Fetch next card
             } else {
-                tts.speak("Failed to suspend card. Make sure Anki Desktop is running.")
+                // Use language-aware error message
+                let errorMsg = pendingDeleteIsSuspend
+                    ? VoiceCommandPhrases.suspendFailedPrompt(locale: inputLanguage)
+                    : VoiceCommandPhrases.deleteFailedPrompt(locale: inputLanguage)
+                tts.speak(errorMsg, language: inputLanguage)
                 state = .awaitingAnswer(cardId: cid, front: front, back: back)
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 await listenForAnswerContinuous()
