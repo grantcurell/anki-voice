@@ -2686,7 +2686,7 @@ struct ContentView: View {
                     #if os(iOS)
                     await director.handle(.toTTS(stt))
                     #endif
-                    await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: canonical, locale: inputLanguage))
+                    await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: canonical, locale: inputLanguage), stt: stt, language: inputLanguage)
                     try? await Task.sleep(nanoseconds: 80_000_000)
                     await advanceToNextCard(previousCardId: cid2)
                 } else {
@@ -2789,7 +2789,7 @@ struct ContentView: View {
                 #if os(iOS)
                 await director.handle(.toTTS(stt))
                 #endif
-                await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
+                await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: VoiceCommandPhrases.canonicalName(ease: ease, locale: inputLanguage), locale: inputLanguage), stt: stt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await advanceToNextCard(previousCardId: cid)
             } else {
@@ -2820,7 +2820,7 @@ struct ContentView: View {
                 await director.handle(.toTTS(stt))  // re-assert after any internal changes
                 try? await Task.sleep(nanoseconds: 50_000_000)  // 50 ms settle
                 #endif
-                await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
+                await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: VoiceCommandPhrases.canonicalName(ease: ease, locale: inputLanguage), locale: inputLanguage), stt: stt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await advanceToNextCard(previousCardId: cid)
             } else {
@@ -2847,7 +2847,7 @@ struct ContentView: View {
                 #if os(iOS)
                 await director.handle(.toTTS(stt))
                 #endif
-                await tts.speakAndWait("\(canonicalName(ease)). \(undoPrompt())")
+                await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: VoiceCommandPhrases.canonicalName(ease: ease, locale: inputLanguage), locale: inputLanguage), stt: stt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await advanceToNextCard(previousCardId: cid)
             } else {
@@ -2861,7 +2861,7 @@ struct ContentView: View {
                 #if os(iOS)
                 await director.handle(.toTTS(stt))
                 #endif
-                await tts.speakAndWait("\(canonicalName(easeToConfirm)). \(undoPrompt())")
+                await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: VoiceCommandPhrases.canonicalName(ease: easeToConfirm, locale: inputLanguage), locale: inputLanguage), stt: stt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await advanceToNextCard(previousCardId: cid)
             } else {
@@ -3034,9 +3034,10 @@ struct ContentView: View {
             let cardId: Int
             let question_text: String?
             let reference_text: String?
+            let language: String?
         }
         
-        let p = Payload(cardId: cid, question_text: front, reference_text: back)
+        let p = Payload(cardId: cid, question_text: front, reference_text: back, language: inputLanguage)
         
         // Enhanced debug logging
         #if DEBUG
@@ -3183,7 +3184,8 @@ struct ContentView: View {
                                                 #if os(iOS)
                                                 await director.handle(.toTTS(stt))
                                                 #endif
-                                                await tts.speakAndWait(result.example, language: "es-ES")
+                                                // Use inputLanguage for TTS so responses match the selected language
+                                                await tts.speakAndWait(result.example, language: inputLanguage)
                                                 if case .awaitingAnswer = state {
                                                     try? await Task.sleep(nanoseconds: 200_000_000)
                                                     stt.transcript = ""
@@ -3307,9 +3309,10 @@ struct ContentView: View {
             let transcript: String
             let question_text: String?
             let reference_text: String?
+            let language: String?
         }
         
-        let p = Payload(cardId: cid, transcript: transcript, question_text: front, reference_text: back)
+        let p = Payload(cardId: cid, transcript: transcript, question_text: front, reference_text: back, language: inputLanguage)
         
         // Create URLSession with timeout for GPT responses (30s for LLM calls)
         let config = URLSessionConfiguration.default
@@ -3350,7 +3353,8 @@ struct ContentView: View {
                         
                         // Wait for explanation to finish speaking
                         // Orchestrator handles STT→TTS transition (closes mic gate, enters TTS phase)
-                        await safeSpeakAndWait(result.explanation)
+                        // Use inputLanguage for TTS so Spanish responses are read in Spanish
+                        await safeSpeakAndWait(result.explanation, language: inputLanguage)
                         if Task.isCancelled { return }
                         
                         // Small settle to let the route flip from speaker to built-in mic
@@ -3597,7 +3601,7 @@ struct ContentView: View {
                         #if os(iOS)
                         await director.handle(.toTTS(stt))
                         #endif
-                        await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: canonical, locale: inputLanguage))
+                        await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: canonical, locale: inputLanguage), stt: stt, language: inputLanguage)
                         try? await Task.sleep(nanoseconds: 80_000_000)
                         await advanceToNextCard(previousCardId: cid)
                         return
@@ -3760,7 +3764,7 @@ struct ContentView: View {
                 #if os(iOS)
                 await director.handle(.toTTS(stt))
                 #endif
-                await tts.speakAndWait("Marked \(canonicalName(ease)). \(undoPrompt())")
+                await tts.speakAndWait(VoiceCommandPhrases.markedPrompt(canonical: VoiceCommandPhrases.canonicalName(ease: ease, locale: inputLanguage), locale: inputLanguage), stt: stt, language: inputLanguage)
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 await advanceToNextCard(previousCardId: cid)
             } else {
@@ -3922,9 +3926,10 @@ struct ContentView: View {
             let question: String
             let question_text: String?
             let reference_text: String?
+            let language: String?
         }
         
-        let p = Payload(cardId: cid, question: questionText, question_text: front, reference_text: back)
+        let p = Payload(cardId: cid, question: questionText, question_text: front, reference_text: back, language: inputLanguage)
         
         // Short timeout for Q&A
         let config = URLSessionConfiguration.default
@@ -3962,7 +3967,8 @@ struct ContentView: View {
                     await director.handle(.toTTS(stt))
                     #endif
                     
-                    await safeSpeakAndWait(result.answer)
+                    // Use inputLanguage for TTS so Spanish responses are read in Spanish
+                    await safeSpeakAndWait(result.answer, language: inputLanguage)
                     if Task.isCancelled { return }
                     
                     // Small settle delay after TTS
@@ -3984,7 +3990,7 @@ struct ContentView: View {
             await director.handle(.toTTS(stt))
             #endif
             
-            await safeSpeakAndWait("Sorry, I couldn't answer that. Ask again or grade.")
+            await safeSpeakAndWait("Sorry, I couldn't answer that. Ask again or grade.", language: inputLanguage)
             
             // Small settle delay after TTS
             try? await Task.sleep(nanoseconds: 150_000_000)

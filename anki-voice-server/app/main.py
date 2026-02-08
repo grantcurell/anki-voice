@@ -157,6 +157,7 @@ class GradeIn(BaseModel):
     transcript: str
     question_text: Optional[str] = None
     reference_text: Optional[str] = None
+    language: Optional[str] = "en-US"  # Language code for prompts and responses
 
 class SubmitGradeIn(BaseModel):
     cardId: int
@@ -167,9 +168,16 @@ class AskIn(BaseModel):
     question: str
     question_text: Optional[str] = None
     reference_text: Optional[str] = None
+    language: Optional[str] = "en-US"  # Language code for prompts and responses
 
 class DeleteNoteIn(BaseModel):
     cardId: int
+
+class ExampleIn(BaseModel):
+    cardId: int
+    question_text: Optional[str] = None
+    reference_text: Optional[str] = None
+    language: Optional[str] = "es-ES"  # Language code for prompts and responses (defaults to Spanish for examples)
 
 @app.get("/current")
 async def current():
@@ -267,7 +275,8 @@ async def api_grade_with_explanation(inp: GradeIn):
         explanation = await grade_with_llm_explanation(
             question=inp.question_text,
             reference=inp.reference_text,
-            transcript=inp.transcript
+            transcript=inp.transcript,
+            language=inp.language or "en-US"
         )
         return {"explanation": explanation}
     except Exception as e:
@@ -305,18 +314,14 @@ async def ask_about_card(inp: AskIn):
     text = await answer_followup(
         question_text=inp.question_text,
         reference_text=inp.reference_text,
-        user_question=inp.question
+        user_question=inp.question,
+        language=inp.language or "en-US"
     )
     return {"answer": text}
 
-class ExampleIn(BaseModel):
-    cardId: int
-    question_text: Optional[str] = None
-    reference_text: Optional[str] = None
-
 @app.post("/example")
 async def get_example(inp: ExampleIn):
-    """Get an example usage in Spanish based on the flashcard content"""
+    """Get an example usage based on the flashcard content"""
     if not inp.question_text or not inp.reference_text:
         raise HTTPException(400, "example requires question_text and reference_text")
     
@@ -327,7 +332,8 @@ async def get_example(inp: ExampleIn):
     try:
         example = await get_example_in_spanish(
             question_text=inp.question_text,
-            reference_text=inp.reference_text
+            reference_text=inp.reference_text,
+            language=inp.language or "es-ES"
         )
         return {"example": example}
     except Exception as e:
