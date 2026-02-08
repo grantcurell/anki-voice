@@ -3007,12 +3007,14 @@ struct ContentView: View {
         let p = Payload(cardId: cid, question_text: front, reference_text: back)
         
         // Enhanced debug logging
+        #if DEBUG
         print("[Example] ===== Starting Example Request =====")
         print("[Example] CardId: \(cid)")
-        print("[Example] Question text length: \(front?.count ?? 0)")
-        print("[Example] Reference text length: \(back?.count ?? 0)")
-        print("[Example] Question text preview: \(front?.prefix(50) ?? "nil")")
-        print("[Example] Reference text preview: \(back?.prefix(50) ?? "nil")")
+        print("[Example] Question text length: \(front.count)")
+        print("[Example] Reference text length: \(back.count)")
+        print("[Example] Question text preview: \(front.prefix(50))")
+        print("[Example] Reference text preview: \(back.prefix(50))")
+        #endif
         
         // Short timeout for example request
         let config = URLSessionConfiguration.default
@@ -3248,8 +3250,10 @@ struct ContentView: View {
         }
         
         // If we get here, all attempts failed
+        #if DEBUG
         print("[Example] ===== All attempts failed ======")
-        print("[Example] Final state: cardId=\(cid), front length=\(front?.count ?? 0), back length=\(back?.count ?? 0)")
+        print("[Example] Final state: cardId=\(cid), front length=\(front.count), back length=\(back.count)")
+        #endif
         tts.speak("I couldn't get an example. Please try again.")
         try? await Task.sleep(nanoseconds: 150_000_000)
         
