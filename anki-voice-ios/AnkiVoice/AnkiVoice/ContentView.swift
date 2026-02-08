@@ -3006,6 +3006,14 @@ struct ContentView: View {
         
         let p = Payload(cardId: cid, question_text: front, reference_text: back)
         
+        // Enhanced debug logging
+        print("[Example] ===== Starting Example Request =====")
+        print("[Example] CardId: \(cid)")
+        print("[Example] Question text length: \(front?.count ?? 0)")
+        print("[Example] Reference text length: \(back?.count ?? 0)")
+        print("[Example] Question text preview: \(front?.prefix(50) ?? "nil")")
+        print("[Example] Reference text preview: \(back?.prefix(50) ?? "nil")")
+        
         // Short timeout for example request
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10.0
@@ -3013,6 +3021,7 @@ struct ContentView: View {
         let session = URLSession(configuration: config)
         
         guard let base = validatedBaseURL() else {
+            print("[Example] ❌ ERROR: Invalid server URL")
             tts.speak("Invalid server URL.")
             // Return to appropriate state
             if case .awaitingAnswer = state {
@@ -3028,6 +3037,7 @@ struct ContentView: View {
         // Determine endpoint path based on whether we're authenticated (production) or not (local dev)
         let endpointPath = authService.isAuthenticated ? "/anki/example" : "/example"
         guard let url = URL(string: "\(base)\(endpointPath)") else {
+            print("[Example] ❌ ERROR: Failed to create URL from base: \(base), path: \(endpointPath)")
             tts.speak("Invalid server URL.")
             // Return to appropriate state
             if case .awaitingAnswer = state {
@@ -3040,42 +3050,77 @@ struct ContentView: View {
             return
         }
         
-        #if DEBUG
         print("[Example] Request URL: \(url.absoluteString)")
         print("[Example] Is authenticated: \(authService.isAuthenticated)")
         print("[Example] Endpoint path: \(endpointPath)")
-        #endif
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         authService.addAuthHeader(to: &req)
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(p)
+        
+        // Encode payload and log it
+        if let bodyData = try? JSONEncoder().encode(p) {
+            req.httpBody = bodyData
+            print("[Example] Request body size: \(bodyData.count) bytes")
+            if let bodyString = String(data: bodyData, encoding: .utf8) {
+                print("[Example] Request body: \(bodyString)")
+            }
+        } else {
+            print("[Example] ❌ ERROR: Failed to encode request payload")
+        }
+        
+        // Log request headers (excluding sensitive auth token)
+        print("[Example] Request headers:")
+        req.allHTTPHeaderFields?.forEach { key, value in
+            if key.lowercased() == "authorization" {
+                print("[Example]   \(key): Bearer [REDACTED]")
+            } else {
+                print("[Example]   \(key): \(value)")
+            }
+        }
         
         // Retry once
         for attempt in 0..<2 {
-            if Task.isCancelled { return }
+            print("[Example] --- Attempt \(attempt + 1) of 2 ---")
+            if Task.isCancelled { 
+                print("[Example] ❌ Task was cancelled")
+                return 
+            }
             
             do {
                 let (data, response) = try await session.data(for: req)
-                if Task.isCancelled { return }
+                if Task.isCancelled { 
+                    print("[Example] ❌ Task was cancelled after receiving response")
+                    return 
+                }
                 
                 // Check HTTP status code
                 if let httpResponse = response as? HTTPURLResponse {
-                    #if DEBUG
                     print("[Example] HTTP Status: \(httpResponse.statusCode)")
+                    print("[Example] Response headers:")
+                    httpResponse.allHeaderFields.forEach { key, value in
+                        print("[Example]   \(key): \(value)")
+                    }
                     print("[Example] Response data length: \(data.count) bytes")
+                    
                     if let responseString = String(data: data, encoding: .utf8) {
                         let preview = responseString.count > 500 ? String(responseString.prefix(500)) + "..." : responseString
-                        print("[Example] Response body: \(preview)")
+                        print("[Example] Response body (first 500 chars): \(preview)")
+                        if responseString.count > 500 {
+                            print("[Example] Response body (last 200 chars): ...\(String(responseString.suffix(200)))")
+                        }
+                    } else {
+                        print("[Example] ❌ WARNING: Response data is not valid UTF-8")
+                        print("[Example] First 50 bytes (hex): \(data.prefix(50).map { String(format: "%02x", $0) }.joined(separator: " "))")
                     }
-                    #endif
                     
                     // Handle HTTP errors
                     if httpResponse.statusCode != 200 {
-                        #if DEBUG
                         print("[Example] ❌ HTTP error: \(httpResponse.statusCode)")
-                        #endif
+                        if let errorString = String(data: data, encoding: .utf8) {
+                            print("[Example] Error response body: \(errorString)")
+                        }
                         if attempt == 0 && httpResponse.statusCode == 404 {
                             // Try the non-prefixed endpoint if 404 on /anki/example
                             if authService.isAuthenticated && endpointPath == "/anki/example" {
@@ -3090,22 +3135,37 @@ struct ContentView: View {
                                     altReq.httpBody = try? JSONEncoder().encode(p)
                                     
                                     let (altData, altResponse) = try await session.data(for: altReq)
-                                    if let altHttpResponse = altResponse as? HTTPURLResponse, altHttpResponse.statusCode == 200 {
-                                        if let result = try? JSONDecoder().decode(ExampleResponse.self, from: altData) {
-                                            #if os(iOS)
-                                            await director.handle(.toTTS(stt))
-                                            #endif
-                                            await tts.speakAndWait(result.example, language: "es-ES")
-                                            if case .awaitingAnswer = state {
-                                                try? await Task.sleep(nanoseconds: 200_000_000)
-                                                stt.transcript = ""
-                                                stt.isFinal = false
-                                                await listenForAnswerContinuous()
-                                            } else {
-                                                try? await Task.sleep(nanoseconds: 200_000_000)
-                                                await listenForAction()
+                                    if let altHttpResponse = altResponse as? HTTPURLResponse {
+                                        print("[Example] Alternative endpoint HTTP Status: \(altHttpResponse.statusCode)")
+                                        if altHttpResponse.statusCode == 200 {
+                                            print("[Example] Alternative endpoint response size: \(altData.count) bytes")
+                                            if let altResponseString = String(data: altData, encoding: .utf8) {
+                                                print("[Example] Alternative endpoint response: \(altResponseString)")
                                             }
-                                            return
+                                            if let result = try? JSONDecoder().decode(ExampleResponse.self, from: altData) {
+                                                print("[Example] ✅ Alternative endpoint: Successfully decoded response")
+                                                print("[Example] Example text length: \(result.example.count)")
+                                                print("[Example] Example text: \(result.example)")
+                                                #if os(iOS)
+                                                await director.handle(.toTTS(stt))
+                                                #endif
+                                                await tts.speakAndWait(result.example, language: "es-ES")
+                                                if case .awaitingAnswer = state {
+                                                    try? await Task.sleep(nanoseconds: 200_000_000)
+                                                    stt.transcript = ""
+                                                    stt.isFinal = false
+                                                    await listenForAnswerContinuous()
+                                                } else {
+                                                    try? await Task.sleep(nanoseconds: 200_000_000)
+                                                    await listenForAction()
+                                                }
+                                                return
+                                            } else {
+                                                print("[Example] ❌ Alternative endpoint: Failed to decode response")
+                                                if let altResponseString = String(data: altData, encoding: .utf8) {
+                                                    print("[Example] Alternative endpoint raw response: \(altResponseString)")
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -3118,12 +3178,18 @@ struct ContentView: View {
                     }
                 }
                 
-                if let result = try? JSONDecoder().decode(ExampleResponse.self, from: data) {
-                    if Task.isCancelled { return }
+                // Try to decode the response
+                do {
+                    let result = try JSONDecoder().decode(ExampleResponse.self, from: data)
+                    if Task.isCancelled { 
+                        print("[Example] ❌ Task was cancelled after decoding")
+                        return 
+                    }
                     
-                    #if DEBUG
                     print("[Example] ✅ Successfully decoded response")
-                    #endif
+                    print("[Example] Example text length: \(result.example.count)")
+                    print("[Example] Example text: \(result.example)")
+                    print("[Example] Example text is empty: \(result.example.isEmpty)")
                     
                     // Re-assert TTS route right before speaking
                     #if os(iOS)
@@ -3146,18 +3212,34 @@ struct ContentView: View {
                         await listenForAction()
                     }
                     return
-                } else {
-                    #if DEBUG
-                    print("[Example] ❌ Failed to decode response as ExampleResponse")
-                    if let responseString = String(data: data, encoding: .utf8) {
-                        print("[Example] Raw response: \(responseString)")
+                } catch let decodingError as DecodingError {
+                    print("[Example] ❌ Decoding error (attempt \(attempt)):")
+                    switch decodingError {
+                    case .typeMismatch(let type, let context):
+                        print("[Example]   Type mismatch: expected \(type), context: \(context.debugDescription)")
+                        print("[Example]   Coding path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .valueNotFound(let type, let context):
+                        print("[Example]   Value not found: \(type), context: \(context.debugDescription)")
+                        print("[Example]   Coding path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .keyNotFound(let key, let context):
+                        print("[Example]   Key not found: \(key.stringValue), context: \(context.debugDescription)")
+                        print("[Example]   Coding path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .dataCorrupted(let context):
+                        print("[Example]   Data corrupted: \(context.debugDescription)")
+                        print("[Example]   Coding path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    @unknown default:
+                        print("[Example]   Unknown decoding error: \(decodingError)")
                     }
-                    #endif
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        print("[Example] Raw response that failed to decode: \(responseString)")
+                    } else {
+                        print("[Example] Response data is not valid UTF-8")
+                    }
                 }
             } catch {
-                #if DEBUG
-                print("[Example] ❌ Request failed (attempt \(attempt)): \(error)")
-                #endif
+                print("[Example] ❌ Outer catch block - Request failed (attempt \(attempt)): \(error)")
+                print("[Example] Error type: \(type(of: error))")
+                print("[Example] Error description: \(error.localizedDescription)")
                 if attempt == 0 {
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     continue
@@ -3166,6 +3248,8 @@ struct ContentView: View {
         }
         
         // If we get here, all attempts failed
+        print("[Example] ===== All attempts failed ======")
+        print("[Example] Final state: cardId=\(cid), front length=\(front?.count ?? 0), back length=\(back?.count ?? 0)")
         tts.speak("I couldn't get an example. Please try again.")
         try? await Task.sleep(nanoseconds: 150_000_000)
         
